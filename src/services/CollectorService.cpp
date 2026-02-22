@@ -30,6 +30,13 @@ void CollectorService::start() {
     std::cout << "🚀 Collector: Starting..." << std::endl;
     running_ = true;
 
+    // Start background saver thread (subscriptions done separately via setupSubscriptions())
+    saver_thread_ = std::thread(&CollectorService::scheduledSaveLoop, this);
+
+    std::cout << "✅ Collector: Started" << std::endl;
+}
+
+void CollectorService::setupSubscriptions() {
     // Build MQTT topic patterns from configured device IDs
     std::vector<std::string> device_ids = DeviceMapper::getDeviceIds();
     std::vector<std::string> topics;
@@ -44,17 +51,12 @@ void CollectorService::start() {
         onMqttMessage(topic, payload);
     };
 
-    // Non-blocking subscription - will retry if MQTT not connected yet
+    // Subscribe to all sensor topics
     if (!mqtt_client_->subscribeMultiple(topics, callback, 1)) {
-        std::cerr << "⚠️  Collector: Initial MQTT subscription failed - will be retried by MQTT auto-reconnect" << std::endl;
-        // Note: Paho MQTT C++ auto-reconnect will restore subscriptions automatically
-        // Don't fail startup - just log the warning
+        std::cerr << "⚠️  Collector: MQTT subscription failed" << std::endl;
+    } else {
+        std::cout << "✅ Collector: Subscribed to " << topics.size() << " device topic(s)" << std::endl;
     }
-
-    // Start background saver thread
-    saver_thread_ = std::thread(&CollectorService::scheduledSaveLoop, this);
-
-    std::cout << "✅ Collector: Started (monitoring " << topics.size() << " device(s))" << std::endl;
 }
 
 void CollectorService::stop() {
@@ -192,35 +194,36 @@ void CollectorService::scheduledSaveLoop() {
     std::cout << "🔄 Collector: Saver thread started" << std::endl;
 
     while (running_) {
+        // Check each device for save interval (do this BEFORE sleeping)
+        auto now = std::chrono::system_clock::now();
+
+        {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+
+            for (const auto& [device_id, data] : device_data_) {
+                // Get last save time
+                auto last_save_it = last_save_times_.find(device_id);
+                if (last_save_it == last_save_times_.end()) {
+                    // First save - trigger immediately instead of waiting
+                    std::cout << "💾 Collector: Triggering initial save for " << device_id << std::endl;
+                    saveDeviceData(device_id);
+                    continue;
+                }
+
+                auto last_save = last_save_it->second;
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_save).count();
+
+                if (elapsed >= save_interval_seconds_) {
+                    std::cout << "💾 Collector: Triggering scheduled save for " << device_id
+                              << " (elapsed: " << elapsed << "s)" << std::endl;
+                    saveDeviceData(device_id);
+                }
+            }
+        }
+
         // Sleep for 1 minute, check every second for shutdown
         for (int i = 0; i < 60 && running_; ++i) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
-
-        if (!running_) break;
-
-        // Check each device for save interval
-        auto now = std::chrono::system_clock::now();
-
-        std::lock_guard<std::mutex> lock(data_mutex_);
-
-        for (const auto& [device_id, data] : device_data_) {
-            // Get last save time
-            auto last_save_it = last_save_times_.find(device_id);
-            if (last_save_it == last_save_times_.end()) {
-                // First save - initialize
-                last_save_times_[device_id] = now;
-                continue;
-            }
-
-            auto last_save = last_save_it->second;
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_save).count();
-
-            if (elapsed >= save_interval_seconds_) {
-                std::cout << "💾 Collector: Triggering scheduled save for " << device_id
-                          << " (elapsed: " << elapsed << "s)" << std::endl;
-                saveDeviceData(device_id);
-            }
         }
     }
 

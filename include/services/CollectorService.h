@@ -73,6 +73,11 @@ public:
      */
     int getDeviceCount() const;
 
+    /**
+     * Setup MQTT subscriptions (call this BEFORE starting Drogon)
+     */
+    void setupSubscriptions();
+
 private:
     /**
      * MQTT message callback

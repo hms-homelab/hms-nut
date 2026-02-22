@@ -19,7 +19,7 @@ MqttClient::~MqttClient() {
 bool MqttClient::connect(const std::string& broker_address,
                          const std::string& username,
                          const std::string& password) {
-    std::lock_guard<std::mutex> lock(connection_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
 
     broker_address_ = broker_address;
     username_ = username;
@@ -69,7 +69,7 @@ bool MqttClient::connect(const std::string& broker_address,
 }
 
 void MqttClient::disconnect() {
-    std::lock_guard<std::mutex> lock(connection_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
 
     if (client_ && connected_) {
         try {
@@ -84,7 +84,7 @@ void MqttClient::disconnect() {
 }
 
 bool MqttClient::isConnected() const {
-    std::lock_guard<std::mutex> lock(connection_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
     return connected_ && client_ && client_->is_connected();
 }
 
@@ -97,18 +97,31 @@ bool MqttClient::subscribe(const std::string& topic, MessageCallback callback, i
     try {
         std::cout << "📡 MQTT: Subscribing to: " << topic << " (QoS " << qos << ")" << std::endl;
 
+        // Get client pointer (release lock before waiting to prevent deadlock)
+        mqtt::async_client* client_ptr = nullptr;
         {
-            std::lock_guard<std::mutex> lock(connection_mutex_);
-            client_->subscribe(topic, qos)->wait();  // Wait for subscription
+            std::unique_lock<std::recursive_mutex> lock(connection_mutex_, std::try_to_lock);
+            if (!lock.owns_lock()) {
+                std::cerr << "⚠️  MQTT: Mutex busy, cannot subscribe now" << std::endl;
+                return false;
+            }
+            client_ptr = client_.get();
         }
+        // Mutex released here - prevents deadlock if callback tries to publish
 
-        // Store callback
+        // Subscribe asynchronously without waiting (truly non-blocking)
+        // Store callback immediately - SUBACK will arrive async
         {
             std::lock_guard<std::mutex> lock(callbacks_mutex_);
             message_callbacks_[topic] = callback;
         }
 
-        std::cout << "✅ MQTT: Subscribed to " << topic << std::endl;
+        if (client_ptr) {
+            // Initiate async subscribe - don't wait for SUBACK
+            client_ptr->subscribe(topic, qos);
+            std::cout << "✅ MQTT: Subscription initiated for " << topic << " (async)" << std::endl;
+        }
+
         return true;
 
     } catch (const mqtt::exception& e) {
@@ -140,7 +153,7 @@ bool MqttClient::unsubscribe(const std::string& topic) {
 
     try {
         {
-            std::lock_guard<std::mutex> lock(connection_mutex_);
+            std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
             client_->unsubscribe(topic)->wait();
         }
 
@@ -174,8 +187,9 @@ bool MqttClient::publish(const std::string& topic,
         pubmsg->set_retained(retain);
 
         {
-            std::lock_guard<std::mutex> lock(connection_mutex_);
-            client_->publish(pubmsg)->wait();
+            std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
+            // Publish asynchronously without waiting (don't block while holding lock)
+            client_->publish(pubmsg);
         }
 
         // Simplified logging for state messages (too verbose otherwise)
@@ -267,7 +281,7 @@ void MqttClient::onMessageArrived(mqtt::const_message_ptr msg) {
 }
 
 void MqttClient::onConnectionLost(const std::string& cause) {
-    std::lock_guard<std::mutex> lock(connection_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
     connected_ = false;
 
     std::cerr << "⚠️  MQTT: Connection lost: " << cause << std::endl;

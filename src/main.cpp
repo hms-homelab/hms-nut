@@ -154,6 +154,14 @@ int main() {
         );
         g_collector->start();
 
+        // Setup MQTT subscriptions (following HMS-FireTV pattern)
+        // This is done AFTER starting services but BEFORE starting Drogon
+        // Subscriptions may block waiting for MQTT connection, but that's OK here
+        std::cout << "🚀 Setting up MQTT subscriptions..." << std::endl;
+        g_nut_bridge->setupSubscriptions();
+        g_collector->setupSubscriptions();
+        std::cout << "✅ MQTT subscriptions configured" << std::endl;
+
         // Setup health check endpoint
         drogon::app().registerHandler(
             "/health",
@@ -210,6 +218,47 @@ int main() {
                 callback(resp);
             },
             {drogon::Get}
+        );
+
+        // Setup republish endpoint
+        drogon::app().registerHandler(
+            "/republish",
+            [](const drogon::HttpRequestPtr& req,
+               std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+
+                Json::Value response;
+                response["service"] = "hms-nut";
+
+                if (!g_nut_bridge) {
+                    response["success"] = false;
+                    response["message"] = "NUT bridge not initialized";
+
+                    Json::StreamWriterBuilder writer;
+                    std::string json_str = Json::writeString(writer, response);
+
+                    auto resp = drogon::HttpResponse::newHttpResponse();
+                    resp->setStatusCode(drogon::k503ServiceUnavailable);
+                    resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+                    resp->setBody(json_str);
+                    callback(resp);
+                    return;
+                }
+
+                bool result = g_nut_bridge->republishDiscovery();
+                response["success"] = result;
+                response["message"] = result ? "Discovery messages republished successfully" : "Failed to republish discovery messages";
+
+                Json::StreamWriterBuilder writer;
+                std::string json_str = Json::writeString(writer, response);
+
+                auto resp = drogon::HttpResponse::newHttpResponse();
+                resp->setStatusCode(result ? drogon::k200OK : drogon::k500InternalServerError);
+                resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+                resp->setBody(json_str);
+
+                callback(resp);
+            },
+            {drogon::Post}
         );
 
         // Configure Drogon

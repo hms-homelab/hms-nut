@@ -43,7 +43,7 @@ void NutBridgeService::start() {
     std::cout << "🚀 NUT Bridge: Starting..." << std::endl;
     running_ = true;
 
-    // Start background thread
+    // Start background thread (don't block main thread with subscriptions here)
     worker_thread_ = std::thread(&NutBridgeService::runLoop, this);
 
     std::cout << "✅ NUT Bridge: Started" << std::endl;
@@ -72,6 +72,38 @@ bool NutBridgeService::isRunning() const {
 std::chrono::system_clock::time_point NutBridgeService::getLastPollTime() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return last_poll_time_;
+}
+
+bool NutBridgeService::republishDiscovery() {
+    if (!mqtt_client_ || !mqtt_client_->isConnected()) {
+        std::cerr << "⚠️  NUT Bridge: Cannot republish - MQTT not connected" << std::endl;
+        return false;
+    }
+
+    std::cout << "🔄 NUT Bridge: Republishing discovery messages..." << std::endl;
+    bool result = discovery_publisher_->publishAll();
+
+    if (result) {
+        std::cout << "✅ NUT Bridge: Discovery messages republished successfully" << std::endl;
+    } else {
+        std::cerr << "❌ NUT Bridge: Failed to republish some discovery messages" << std::endl;
+    }
+
+    return result;
+}
+
+void NutBridgeService::setupSubscriptions() {
+    // Subscribe to Home Assistant status to republish discovery on HA restart
+    if (mqtt_client_ && mqtt_client_->isConnected()) {
+        mqtt_client_->subscribe("homeassistant/status",
+            [this](const std::string& topic, const std::string& payload) {
+                if (payload == "online") {
+                    std::cout << "🏠 Home Assistant restarted, republishing discovery..." << std::endl;
+                    republishDiscovery();
+                }
+            }, 1);
+        std::cout << "✅ Subscribed to homeassistant/status" << std::endl;
+    }
 }
 
 void NutBridgeService::runLoop() {

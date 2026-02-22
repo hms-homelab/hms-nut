@@ -71,6 +71,18 @@ public:
      */
     std::chrono::system_clock::time_point getLastPollTime() const;
 
+    /**
+     * Republish MQTT discovery messages
+     *
+     * @return true if republish succeeded
+     */
+    bool republishDiscovery();
+
+    /**
+     * Setup MQTT subscriptions (call this BEFORE starting Drogon)
+     */
+    void setupSubscriptions();
+
 private:
     /**
      * Background thread main loop
