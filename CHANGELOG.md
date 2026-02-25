@@ -5,6 +5,50 @@ All notable changes to HMS-NUT will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-02-25
+
+### Fixed
+- **Docker build**: Fixed Dockerfile for multi-arch GHCR publishing (trixie base, correct package names)
+- **libpqxx 7.x compatibility**: Replaced `conn_->close()` with `conn_.reset()` (close() is protected)
+
+### Added
+- `.dockerignore` to exclude build dirs and unnecessary files from Docker context
+- GitHub Actions CI workflow for automated multi-arch Docker builds (amd64 + arm64)
+- VERSION file for release tracking
+- `curl` in runtime image for health check endpoint
+
+### Changed
+- Docker base image: `debian:bookworm-slim` → `debian:trixie-slim` (required for Drogon framework)
+- Docker image size: 108 MB with stripped binary
+
+## [1.1.0] - 2026-02-22
+
+### Added
+- **Multi-Device Collection Support**: Collector now subscribes to multiple UPS devices via MQTT
+  - Configurable via `UPS_DEVICE_IDS` environment variable (comma-separated list)
+  - Support for device ID mapping via `UPS_DB_MAPPING` (JSON, maps MQTT IDs to database identifiers)
+  - Support for friendly names via `UPS_FRIENDLY_NAMES` (JSON)
+  - Example: HMS-NUT + 2 ESP32 devices (3 devices total)
+- DeviceMapper utility class for managing multiple device configurations
+- Automatic database device registration for new devices
+
+### Changed
+- CollectorService now subscribes to multiple MQTT topic patterns (one per device)
+- Database schema supports multiple device identifiers via `device_identifier` field
+- Service configuration updated to collect from 3 UPS devices:
+  - `apc_bx` (HMS-NUT local device)
+  - `apc_ups_d0_cf_13_2f_df_dc` (ESP32 #1 - MT300N router)
+  - `apc_ups_d0_cf_13_2f_e0_b0` (ESP32 #2 - ATX1800 router)
+
+### Fixed
+- ESP32 devices were not being collected (service only configured for local NUT device)
+- ML Intelligence workflow was only generating predictions for HMS-NUT device
+- Backfilled 9,170 missing records from Home Assistant recorder (Feb 14-22, 2026)
+
+### Performance
+- Collecting from 3 devices simultaneously with no performance degradation
+- Database inserts: ~3600 records/hour (1200 per device)
+
 ## [1.0.1] - 2026-02-21
 
 ### Added

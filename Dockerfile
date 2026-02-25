@@ -1,21 +1,27 @@
 # HMS-NUT Dockerfile
 # Multi-stage build for minimal image size
+# Uses trixie (Debian 13) for Drogon framework availability
 
-# Build stage
-FROM debian:bookworm-slim AS builder
+# =============================================================================
+# Stage 1: Builder
+# =============================================================================
+FROM debian:trixie-slim AS builder
 
-# Install build dependencies
+# Install build dependencies (all from Debian repos, multi-arch safe)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
-    git \
     ca-certificates \
     libdrogon-dev \
     libjsoncpp-dev \
     libpqxx-dev \
-    libpaho-mqttpp3-dev \
-    libpaho-mqtt3as-dev \
-    libnut-dev \
+    libpaho-mqttpp-dev \
+    libpaho-mqtt-dev \
+    libupsclient-dev \
+    libsqlite3-dev \
+    default-libmysqlclient-dev \
+    libhiredis-dev \
+    libyaml-cpp-dev \
     libssl-dev \
     libpq-dev \
     uuid-dev \
@@ -25,32 +31,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy source code
 WORKDIR /build
-COPY CMakeLists.txt .
+COPY CMakeLists.txt VERSION ./
 COPY src/ src/
 COPY include/ include/
 
 # Build
 RUN mkdir build && cd build && \
     cmake -DCMAKE_BUILD_TYPE=Release .. && \
-    make -j$(nproc)
+    make -j$(nproc) && \
+    strip hms_nut
 
-# Runtime stage
-FROM debian:bookworm-slim
+# =============================================================================
+# Stage 2: Runtime
+# =============================================================================
+FROM debian:trixie-slim
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libjsoncpp25 \
-    libpqxx-7.8 \
-    libpaho-mqttpp3-1 \
-    libpaho-mqtt3as1 \
-    libupsclient6 \
-    libssl3 \
-    libpq5 \
-    libuuid1 \
-    zlib1g \
-    libbrotli1 \
-    libstdc++6 \
     ca-certificates \
+    curl \
+    libdrogon1t64 \
+    libpqxx-7.10 \
+    libpaho-mqtt1.3 \
+    libpaho-mqttpp3-1 \
+    libupsclient6t64 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -58,11 +62,10 @@ RUN useradd -r -s /bin/false hms
 
 # Copy binary from builder
 COPY --from=builder /build/build/hms_nut /usr/local/bin/hms_nut
+RUN chmod +x /usr/local/bin/hms_nut
 
 # Create working directory
 WORKDIR /app
-
-# Set ownership
 RUN chown -R hms:hms /app
 
 # Switch to non-root user

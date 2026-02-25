@@ -54,7 +54,7 @@ bool DatabaseService::reconnect() {
     try {
         // Close existing connection
         if (conn_) {
-            conn_->close();
+            conn_.reset();
         }
 
         // Create new connection
@@ -81,11 +81,10 @@ void DatabaseService::close() {
     if (conn_) {
         try {
             std::cout << "💾 DB: Closing connection..." << std::endl;
-            conn_->close();
+            conn_.reset();
         } catch (const std::exception& e) {
             std::cerr << "❌ DB: Close error: " << e.what() << std::endl;
         }
-        conn_ = nullptr;
     }
 }
 
