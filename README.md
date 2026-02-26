@@ -5,6 +5,8 @@ A high-performance C++ microservice for UPS (Uninterruptible Power Supply) monit
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-%23FFDD00.svg?logo=buy-me-a-coffee)](https://www.buymeacoffee.com/aamat09)
+[![GHCR](https://img.shields.io/badge/ghcr.io-hms--nut-blue?logo=docker)](https://github.com/hms-homelab/hms-nut/pkgs/container/hms-nut)
+[![Build](https://github.com/hms-homelab/hms-nut/actions/workflows/docker-build.yml/badge.svg)](https://github.com/hms-homelab/hms-nut/actions)
 
 ## Features
 
