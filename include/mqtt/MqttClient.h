@@ -130,6 +130,11 @@ private:
     void onConnectionLost(const std::string& cause);
 
     /**
+     * Reconnected callback (internal) — restores connected_ and re-subscribes
+     */
+    void onReconnected(const std::string& cause);
+
+    /**
      * Check if topic matches pattern (supports wildcards)
      *
      * @param topic Actual topic
@@ -151,6 +156,7 @@ private:
     std::string username_;
     std::string password_;
     bool connected_;
+    bool initial_connect_done_ = false;
     mutable std::recursive_mutex connection_mutex_;  // Recursive to allow callback re-entry
 
     // Auto-reconnect enabled

@@ -41,6 +41,12 @@ bool MqttClient::connect(const std::string& broker_address,
             onConnectionLost(cause);
         });
 
+        client_->set_connected_handler([this](const std::string& cause) {
+            if (initial_connect_done_) {
+                onReconnected(cause);
+            }
+        });
+
         // Connection options
         mqtt::connect_options connOpts;
         connOpts.set_keep_alive_interval(60);  // 60 seconds keep-alive
@@ -57,6 +63,7 @@ bool MqttClient::connect(const std::string& broker_address,
         conntok->wait();  // Wait for connection
 
         connected_ = true;
+        initial_connect_done_ = true;
         std::cout << "✅ MQTT: Connected successfully" << std::endl;
 
         return true;
@@ -288,6 +295,25 @@ void MqttClient::onConnectionLost(const std::string& cause) {
 
     if (auto_reconnect_) {
         std::cout << "🔄 MQTT: Auto-reconnect enabled (handled by paho-mqtt)" << std::endl;
+    }
+}
+
+void MqttClient::onReconnected(const std::string& cause) {
+    {
+        std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
+        connected_ = true;
+    }
+    std::cout << "✅ MQTT: Reconnected: " << cause << std::endl;
+
+    // Re-subscribe without waiting — async fire-and-forget avoids paho thread deadlocks
+    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    for (const auto& [topic, callback] : message_callbacks_) {
+        try {
+            client_->subscribe(topic, 1);  // No ->wait()
+            std::cout << "✅ MQTT: Re-subscribed to " << topic << std::endl;
+        } catch (const mqtt::exception& e) {
+            std::cerr << "❌ MQTT: Re-subscribe failed for " << topic << ": " << e.what() << std::endl;
+        }
     }
 }
 

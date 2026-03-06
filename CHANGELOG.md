@@ -5,6 +5,14 @@ All notable changes to HMS-NUT will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-03-05
+
+### Fixed
+- **MQTT reconnect zombie bug**: After connection loss, paho auto-reconnect restored TCP but
+  `connected_` flag stayed `false` (no `set_connected_handler`). Service became deaf — running
+  but unable to publish or receive commands. Added `onReconnected()` callback that restores
+  `connected_` and re-subscribes all stored topic callbacks (lost due to `clean_session=true`).
+
 ## [1.1.1] - 2026-02-25
 
 ### Fixed
