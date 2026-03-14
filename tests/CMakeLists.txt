@@ -125,6 +125,48 @@ target_link_libraries(test_http_endpoints
 )
 target_include_directories(test_http_endpoints PRIVATE ${CMAKE_SOURCE_DIR}/../include)
 
+# Daily Summary tests (unit + integration + e2e)
+find_package(nlohmann_json CONFIG REQUIRED)
+
+# Fetch hms-shared for llm_client
+include(FetchContent)
+FetchContent_Declare(hms_shared
+    GIT_REPOSITORY https://github.com/hms-homelab/hms-shared.git
+    GIT_TAG        main
+)
+FetchContent_Populate(hms_shared)
+
+add_library(hms_llm_test STATIC
+    ${hms_shared_SOURCE_DIR}/llm/src/llm_client.cpp
+)
+target_include_directories(hms_llm_test PUBLIC
+    ${hms_shared_SOURCE_DIR}/llm/include
+)
+target_link_libraries(hms_llm_test PUBLIC
+    nlohmann_json::nlohmann_json
+    CURL::libcurl
+)
+
+add_executable(test_daily_summary
+    test_daily_summary.cpp
+    ${CMAKE_SOURCE_DIR}/../src/database/DatabaseService.cpp
+    ${CMAKE_SOURCE_DIR}/../src/nut/UpsData.cpp
+)
+target_link_libraries(test_daily_summary
+    GTest::GTest
+    GTest::Main
+    jsoncpp_lib
+    hms_llm_test
+    ${PQXX_LIB}
+    ${PQ_LIB}
+    CURL::libcurl
+    pthread
+)
+target_include_directories(test_daily_summary PRIVATE
+    ${CMAKE_SOURCE_DIR}/../include
+    ${hms_shared_SOURCE_DIR}/llm/include
+)
+
 # Enable testing
 enable_testing()
 
@@ -135,6 +177,20 @@ add_test(NAME NutBridgeRepublishTests COMMAND test_nut_bridge_republish)
 add_test(NAME HAStatusSubscriptionTests COMMAND test_ha_status_subscription)
 add_test(NAME AsyncSubscriptionTests COMMAND test_async_subscriptions)
 add_test(NAME HTTPEndpointTests COMMAND test_http_endpoints)
+add_test(NAME DailySummaryTests COMMAND test_daily_summary)
+
+# Daily Summary E2E tests (requires running service + Ollama)
+add_executable(test_daily_summary_e2e
+    test_daily_summary_e2e.cpp
+)
+target_link_libraries(test_daily_summary_e2e
+    GTest::GTest
+    jsoncpp_lib
+    CURL::libcurl
+    pthread
+)
+target_include_directories(test_daily_summary_e2e PRIVATE ${CMAKE_SOURCE_DIR}/../include)
+add_test(NAME DailySummaryE2ETests COMMAND test_daily_summary_e2e)
 
 # Print configuration
 message(STATUS "==================== HMS-NUT Tests Configuration ====================")

@@ -1,8 +1,10 @@
 #include "services/NutBridgeService.h"
 #include "services/CollectorService.h"
+#include "services/DailySummaryService.h"
 #include "mqtt/MqttClient.h"
 #include "database/DatabaseService.h"
 #include "utils/DeviceMapper.h"
+#include "llm_client.h"
 #include <drogon/drogon.h>
 #include <csignal>
 #include <cstdlib>
@@ -16,12 +18,16 @@ using namespace hms_nut;
 // Global services for signal handler
 std::unique_ptr<NutBridgeService> g_nut_bridge;
 std::unique_ptr<CollectorService> g_collector;
+std::unique_ptr<DailySummaryService> g_daily_summary;
 std::shared_ptr<MqttClient> g_mqtt_client;
 
 void signalHandler(int signal) {
     std::cout << "\n🛑 Received signal " << signal << ", shutting down gracefully..." << std::endl;
 
     // Stop services
+    if (g_daily_summary) {
+        g_daily_summary->stop();
+    }
     if (g_collector) {
         g_collector->stop();
     }
@@ -88,6 +94,15 @@ int main() {
     int collector_save_interval = getEnvInt("COLLECTOR_SAVE_INTERVAL", 3600);
     int health_check_port = getEnvInt("HEALTH_CHECK_PORT", 8892);  // Changed from 8891 (used by hms-weather)
 
+    // LLM configuration
+    bool llm_enabled = getEnv("LLM_ENABLED", "false") == "true";
+    std::string llm_provider_str = getEnv("LLM_PROVIDER", "ollama");
+    std::string llm_endpoint = getEnv("LLM_ENDPOINT", "http://192.168.2.5:11434");
+    std::string llm_model = getEnv("LLM_MODEL", "llama3.1:8b-instruct-q4_K_M");
+    std::string llm_api_key = getEnv("LLM_API_KEY", "");
+    std::string llm_prompt_file = getEnv("LLM_PROMPT_FILE", "llm_prompt.txt");
+    int summary_hour = getEnvInt("SUMMARY_HOUR", 7);
+
     std::cout << "⚙️  Configuration:" << std::endl;
     std::cout << "   NUT Server: " << nut_host << ":" << nut_port << std::endl;
     std::cout << "   UPS Name: " << nut_ups_name << std::endl;
@@ -97,6 +112,14 @@ int main() {
     std::cout << "   Database: " << db_name << "@" << db_host << ":" << db_port << std::endl;
     std::cout << "   Collector Save Interval: " << collector_save_interval << "s" << std::endl;
     std::cout << "   Health Check Port: " << health_check_port << std::endl;
+    std::cout << "   LLM Enabled: " << (llm_enabled ? "true" : "false") << std::endl;
+    if (llm_enabled) {
+        std::cout << "   LLM Provider: " << llm_provider_str << std::endl;
+        std::cout << "   LLM Model: " << llm_model << std::endl;
+        std::cout << "   LLM Endpoint: " << llm_endpoint << std::endl;
+        std::cout << "   Summary Hour: " << summary_hour << ":00" << std::endl;
+        std::cout << "   Prompt File: " << llm_prompt_file << std::endl;
+    }
     std::cout << std::endl;
 
     // Initialize device mapper from environment
@@ -154,6 +177,25 @@ int main() {
         );
         g_collector->start();
 
+        // Create and start Daily Summary Service (LLM-powered)
+        hms::LLMConfig llm_config;
+        llm_config.enabled = llm_enabled;
+        llm_config.provider = hms::LLMClient::parseProvider(llm_provider_str);
+        llm_config.endpoint = llm_endpoint;
+        llm_config.model = llm_model;
+        llm_config.api_key = llm_api_key;
+        llm_config.keep_alive_seconds = 0;  // Evict model from VRAM after call
+
+        std::cout << "🚀 Starting Daily Summary Service..." << std::endl;
+        g_daily_summary = std::make_unique<DailySummaryService>(
+            g_mqtt_client,
+            DatabaseService::getInstance(),
+            llm_config,
+            summary_hour,
+            llm_prompt_file
+        );
+        g_daily_summary->start();
+
         // Setup MQTT subscriptions (following HMS-FireTV pattern)
         // This is done AFTER starting services but BEFORE starting Drogon
         // Subscriptions may block waiting for MQTT connection, but that's OK here
@@ -161,6 +203,11 @@ int main() {
         g_nut_bridge->setupSubscriptions();
         g_collector->setupSubscriptions();
         std::cout << "✅ MQTT subscriptions configured" << std::endl;
+
+        // Publish HA discovery for daily summary sensor
+        if (llm_enabled) {
+            g_daily_summary->publishDiscovery();
+        }
 
         // Setup health check endpoint
         drogon::app().registerHandler(
@@ -178,6 +225,7 @@ int main() {
                 components["database"] = DatabaseService::getInstance().isConnected() ? "connected" : "disconnected";
                 components["nut_bridge"] = g_nut_bridge && g_nut_bridge->isRunning() ? "running" : "stopped";
                 components["collector"] = g_collector && g_collector->isRunning() ? "running" : "stopped";
+                components["daily_summary"] = g_daily_summary && g_daily_summary->isRunning() ? "running" : "disabled";
 
                 // Overall status
                 bool all_ok = (g_mqtt_client && g_mqtt_client->isConnected()) &&
@@ -204,6 +252,16 @@ int main() {
                     oss << std::put_time(std::gmtime(&time_t_val), "%Y-%m-%dT%H:%M:%SZ");
                     response["last_db_save"] = oss.str();
                     response["devices_monitored"] = g_collector->getDeviceCount();
+                }
+
+                if (g_daily_summary) {
+                    auto last_summary = g_daily_summary->getLastSummaryTime();
+                    if (last_summary != std::chrono::system_clock::time_point{}) {
+                        auto time_t_val = std::chrono::system_clock::to_time_t(last_summary);
+                        std::ostringstream oss;
+                        oss << std::put_time(std::gmtime(&time_t_val), "%Y-%m-%dT%H:%M:%SZ");
+                        response["last_daily_summary"] = oss.str();
+                    }
                 }
 
                 // Serialize response
@@ -256,6 +314,60 @@ int main() {
                 resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
                 resp->setBody(json_str);
 
+                callback(resp);
+            },
+            {drogon::Post}
+        );
+
+        // Setup manual summary trigger endpoint
+        // POST /summary?date=2026-03-13  (defaults to yesterday)
+        drogon::app().registerHandler(
+            "/summary",
+            [](const drogon::HttpRequestPtr& req,
+               std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+
+                Json::Value response;
+                response["service"] = "hms-nut";
+
+                if (!g_daily_summary || !g_daily_summary->isRunning()) {
+                    response["success"] = false;
+                    response["message"] = "Daily summary service not running";
+
+                    Json::StreamWriterBuilder writer;
+                    auto resp = drogon::HttpResponse::newHttpResponse();
+                    resp->setStatusCode(drogon::k503ServiceUnavailable);
+                    resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+                    resp->setBody(Json::writeString(writer, response));
+                    callback(resp);
+                    return;
+                }
+
+                // Get date parameter (default: yesterday)
+                std::string date = req->getParameter("date");
+                if (date.empty()) {
+                    auto yesterday = std::chrono::system_clock::now() - std::chrono::hours(24);
+                    auto yesterday_t = std::chrono::system_clock::to_time_t(yesterday);
+                    std::tm yesterday_tm;
+                    localtime_r(&yesterday_t, &yesterday_tm);
+                    std::ostringstream oss;
+                    oss << std::put_time(&yesterday_tm, "%Y-%m-%d");
+                    date = oss.str();
+                }
+
+                bool result = g_daily_summary->generateSummary(date);
+                response["success"] = result;
+                response["date"] = date;
+                if (result) {
+                    response["summary"] = g_daily_summary->getLastSummary();
+                } else {
+                    response["message"] = "Summary generation failed";
+                }
+
+                Json::StreamWriterBuilder writer;
+                auto resp = drogon::HttpResponse::newHttpResponse();
+                resp->setStatusCode(result ? drogon::k200OK : drogon::k500InternalServerError);
+                resp->setContentTypeCode(drogon::CT_APPLICATION_JSON);
+                resp->setBody(Json::writeString(writer, response));
                 callback(resp);
             },
             {drogon::Post}

@@ -5,6 +5,22 @@ All notable changes to HMS-NUT will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-14
+
+### Added
+- **Daily energy summary**: Queries PostgreSQL for yesterday's UPS metrics across all
+  configured devices, sends to LLM (Ollama/OpenAI/Gemini/Anthropic) for analysis,
+  publishes summary to MQTT with HA discovery. Runs automatically at configurable hour
+  (default 7 AM).
+- **Manual summary endpoint**: `POST /summary?date=YYYY-MM-DD` triggers on-demand
+  summary generation for any date.
+- **LLM integration** via `hms-shared` library (`hms::LLMClient`): multi-provider
+  support with configurable prompt template, temperature, keep_alive.
+- **DatabaseService::queryDailyMetrics()**: aggregates voltage ranges, load, battery,
+  runtime, power failures, and transfer reasons per device per day.
+- **Unit + integration tests**: 16 unit tests (provider parsing, template substitution,
+  prompt loading) + 4 integration tests (PostgreSQL daily metrics queries).
+
 ## [1.1.2] - 2026-03-05
 
 ### Fixed

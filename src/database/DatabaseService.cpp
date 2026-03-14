@@ -309,6 +309,157 @@ bool DatabaseService::insertUpsMetrics(const UpsData& data, const std::string& d
     });
 }
 
+std::string DatabaseService::queryDailyMetrics(const std::string& date) {
+    std::string result;
+
+    executeWithRetry([&]() -> bool {
+        std::lock_guard<std::mutex> lock(connection_mutex_);
+
+        try {
+            pqxx::work txn(*conn_);
+
+            std::string query =
+                "SELECT d.device_name, d.device_identifier, d.location, "
+                "COUNT(*) as readings, "
+                "ROUND(AVG(m.input_voltage)::numeric, 1) as avg_voltage, "
+                "ROUND(MIN(m.input_voltage)::numeric, 1) as min_voltage, "
+                "ROUND(MAX(m.input_voltage)::numeric, 1) as max_voltage, "
+                "ROUND(AVG(m.load_percentage)::numeric, 1) as avg_load_pct, "
+                "ROUND(AVG(m.load_watts)::numeric, 1) as avg_watts, "
+                "ROUND(MAX(m.load_watts)::numeric, 1) as max_watts, "
+                "ROUND(AVG(m.battery_charge)::numeric, 1) as avg_battery, "
+                "ROUND(MIN(m.battery_charge)::numeric, 1) as min_battery, "
+                "ROUND(AVG(m.battery_runtime)::numeric, 0) as avg_runtime_sec, "
+                "ROUND(MIN(m.battery_runtime)::numeric, 0) as min_runtime_sec, "
+                "ROUND(AVG(m.output_voltage)::numeric, 1) as avg_output_voltage, "
+                "ROUND(AVG(m.temperature)::numeric, 1) as avg_temperature, "
+                "COUNT(*) FILTER (WHERE m.power_failure = true) as power_failures, "
+                "COUNT(DISTINCT m.ups_status) as distinct_statuses, "
+                "STRING_AGG(DISTINCT m.ups_status, ', ') as statuses, "
+                "STRING_AGG(DISTINCT m.last_transfer_reason, ', ') as transfer_reasons, "
+                "MIN(m.timestamp) as first_reading, "
+                "MAX(m.timestamp) as last_reading "
+                "FROM ups_metrics m "
+                "JOIN ups_devices d ON m.device_id = d.device_id "
+                "WHERE m.timestamp::date = " + txn.quote(date) + " "
+                "GROUP BY d.device_id, d.device_name, d.device_identifier, d.location "
+                "ORDER BY d.device_id";
+
+            pqxx::result res = txn.exec(query);
+            txn.commit();
+
+            if (res.empty()) {
+                result = "No UPS metrics data found for " + date + ".";
+                return true;
+            }
+
+            std::ostringstream oss;
+            oss << "UPS Energy Report for " << date << "\n";
+            oss << "========================================\n\n";
+
+            for (const auto& row : res) {
+                std::string name = row["device_name"].as<std::string>();
+                std::string identifier = row["device_identifier"].as<std::string>();
+                int readings = row["readings"].as<int>();
+
+                oss << "Device: " << name << " (" << identifier << ")\n";
+                oss << "  Readings: " << readings << "\n";
+                oss << "  Time range: " << row["first_reading"].as<std::string>()
+                    << " to " << row["last_reading"].as<std::string>() << "\n";
+
+                if (!row["avg_voltage"].is_null()) {
+                    oss << "  Input Voltage: "
+                        << row["min_voltage"].as<std::string>() << "V - "
+                        << row["max_voltage"].as<std::string>() << "V (avg "
+                        << row["avg_voltage"].as<std::string>() << "V)\n";
+                }
+
+                if (!row["avg_output_voltage"].is_null()) {
+                    oss << "  Output Voltage: " << row["avg_output_voltage"].as<std::string>() << "V avg\n";
+                }
+
+                if (!row["avg_load_pct"].is_null()) {
+                    oss << "  Load: " << row["avg_load_pct"].as<std::string>() << "% avg";
+                    if (!row["avg_watts"].is_null()) {
+                        oss << " (" << row["avg_watts"].as<std::string>() << "W avg, "
+                            << row["max_watts"].as<std::string>() << "W peak)";
+                    }
+                    oss << "\n";
+                }
+
+                if (!row["avg_battery"].is_null()) {
+                    oss << "  Battery: " << row["avg_battery"].as<std::string>() << "% avg, "
+                        << row["min_battery"].as<std::string>() << "% min\n";
+                }
+
+                if (!row["avg_runtime_sec"].is_null()) {
+                    double avg_min = row["avg_runtime_sec"].as<double>() / 60.0;
+                    double min_min = row["min_runtime_sec"].as<double>() / 60.0;
+                    oss << "  Runtime Reserve: " << std::fixed << std::setprecision(1)
+                        << avg_min << " min avg, " << min_min << " min min\n";
+                }
+
+                if (!row["avg_temperature"].is_null()) {
+                    oss << "  Temperature: " << row["avg_temperature"].as<std::string>() << "C avg\n";
+                }
+
+                int power_failures = row["power_failures"].as<int>();
+                oss << "  Power Failures: " << power_failures << "\n";
+
+                if (!row["statuses"].is_null()) {
+                    oss << "  UPS Status(es): " << row["statuses"].as<std::string>() << "\n";
+                }
+
+                if (!row["transfer_reasons"].is_null()) {
+                    std::string reasons = row["transfer_reasons"].as<std::string>();
+                    if (!reasons.empty()) {
+                        oss << "  Transfer Reasons: " << reasons << "\n";
+                    }
+                }
+
+                oss << "\n";
+            }
+
+            // Also query power events for the day
+            pqxx::work txn2(*conn_);
+            std::string events_query =
+                "SELECT d.device_name, pe.event_type, pe.event_timestamp, "
+                "pe.battery_level_start, pe.battery_level_end, pe.load_at_event "
+                "FROM power_events pe "
+                "JOIN ups_devices d ON pe.device_id = d.device_id "
+                "WHERE pe.event_timestamp::date = " + txn2.quote(date) + " "
+                "ORDER BY pe.event_timestamp";
+
+            pqxx::result events_res = txn2.exec(events_query);
+            txn2.commit();
+
+            if (!events_res.empty()) {
+                oss << "Power Events:\n";
+                for (const auto& ev : events_res) {
+                    oss << "  - " << ev["timestamp"].as<std::string>() << ": "
+                        << ev["device_name"].as<std::string>() << " - "
+                        << ev["event_type"].as<std::string>();
+                    if (!ev["battery_level_start"].is_null()) {
+                        oss << " (battery: " << ev["battery_level_start"].as<std::string>()
+                            << "% -> " << ev["battery_level_end"].as<std::string>() << "%)";
+                    }
+                    oss << "\n";
+                }
+                oss << "\n";
+            }
+
+            result = oss.str();
+            return true;
+
+        } catch (const std::exception& e) {
+            std::cerr << "❌ DB: queryDailyMetrics error: " << e.what() << std::endl;
+            return false;
+        }
+    });
+
+    return result;
+}
+
 bool DatabaseService::logPowerEvent(int device_id,
                                      const std::string& event_type,
                                      double battery_level_start,

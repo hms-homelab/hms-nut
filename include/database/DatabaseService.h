@@ -88,6 +88,17 @@ public:
                        double load_at_event);
 
     /**
+     * Query daily aggregated metrics for all devices on a given date
+     *
+     * Returns a formatted string with per-device stats:
+     * voltage ranges, load, battery, power failures, etc.
+     *
+     * @param date Date string in YYYY-MM-DD format
+     * @return Formatted metrics string, or empty on failure
+     */
+    std::string queryDailyMetrics(const std::string& date);
+
+    /**
      * Close database connection
      */
     void close();
