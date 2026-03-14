@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     ca-certificates \
+    git \
+    libcurl4-openssl-dev \
     libdrogon-dev \
     libjsoncpp-dev \
     libpqxx-dev \
@@ -24,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libyaml-cpp-dev \
     libssl-dev \
     libpq-dev \
+    nlohmann-json3-dev \
     uuid-dev \
     zlib1g-dev \
     libbrotli-dev \
@@ -31,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy source code
 WORKDIR /build
-COPY CMakeLists.txt VERSION ./
+COPY CMakeLists.txt VERSION llm_prompt.txt ./
 COPY src/ src/
 COPY include/ include/
 
@@ -50,6 +53,7 @@ FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    libcurl4t64 \
     libdrogon1t64 \
     libpqxx-7.10 \
     libpaho-mqtt1.3 \
@@ -60,8 +64,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Create non-root user
 RUN useradd -r -s /bin/false hms
 
-# Copy binary from builder
+# Copy binary and prompt from builder
 COPY --from=builder /build/build/hms_nut /usr/local/bin/hms_nut
+COPY --from=builder /build/llm_prompt.txt /app/llm_prompt.txt
 RUN chmod +x /usr/local/bin/hms_nut
 
 # Create working directory
