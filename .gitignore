@@ -1,0 +1,31 @@
+# Build artifacts
+build/
+tests/build/
+*.o
+*.a
+*.so
+*.dylib
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local configuration (contains credentials)
+hms-nut.service
+
+# Log files
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+
+# Upload directory (may contain user data)
+uploads/

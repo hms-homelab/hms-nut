@@ -1,0 +1,52 @@
+# Build directories
+build/
+cmake-build-*/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Tests (not needed in production image)
+tests/
+Testing/
+coverage/
+
+# Documentation
+docs/
+*.md
+LICENSE
+
+# CI/CD
+.github/
+
+# Logs and data
+*.log
+logs/
+uploads/
+
+# Environment and secrets
+.env
+*.pem
+*.key
+secrets/
+
+# Service files
+hms-nut.service
+hms-nut.service.example
+
+# Docker
+docker-compose.yml
+Dockerfile
+
+# Misc
+*.backup
+*.bak
+*~
+.DS_Store
+Thumbs.db

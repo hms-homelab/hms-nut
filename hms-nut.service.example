@@ -1,0 +1,66 @@
+[Unit]
+Description=HMS-NUT - Unified UPS Monitoring Service
+Documentation=https://github.com/hms-homelab/hms-nut
+After=network.target nut-server.service postgresql.service
+Wants=nut-server.service postgresql.service
+
+[Service]
+Type=simple
+User=YOUR_USER
+WorkingDirectory=/opt/hms-nut
+ExecStart=/opt/hms-nut/hms_nut
+
+# NUT Server Configuration (for the NUT bridge that polls local NUT server)
+Environment="NUT_HOST=localhost"
+Environment="NUT_PORT=3493"
+Environment="NUT_UPS_NAME=ups@localhost"
+Environment="NUT_DEVICE_ID=ups"
+Environment="NUT_DEVICE_NAME=My UPS"
+Environment="NUT_POLL_INTERVAL=60"
+
+# UPS Device Configuration (for MQTT collector)
+# Comma-separated list of MQTT device ID prefixes to collect from
+# If not set, defaults to NUT_DEVICE_ID
+Environment="UPS_DEVICE_IDS=ups"
+# Optional: JSON mapping of MQTT device IDs to PostgreSQL identifiers
+# Example: {"ups": "my_ups_device", "esp32_ups": "esp32_ups_01"}
+#Environment="UPS_DB_MAPPING={}"
+# Optional: JSON mapping of MQTT device IDs to friendly names
+# Example: {"ups": "Office UPS", "esp32_ups": "Garage UPS"}
+#Environment="UPS_FRIENDLY_NAMES={}"
+
+# MQTT Broker Configuration
+Environment="MQTT_BROKER=localhost"
+Environment="MQTT_PORT=1883"
+Environment="MQTT_USER=your_mqtt_user"
+Environment="MQTT_PASSWORD=your_mqtt_password"
+Environment="MQTT_CLIENT_ID=hms_nut_service"
+
+# PostgreSQL Configuration
+Environment="DB_HOST=localhost"
+Environment="DB_PORT=5432"
+Environment="DB_NAME=ups_monitoring"
+Environment="DB_USER=your_db_user"
+Environment="DB_PASSWORD=your_db_password"
+
+# Service Configuration
+Environment="COLLECTOR_SAVE_INTERVAL=3600"
+Environment="LOG_LEVEL=info"
+Environment="HEALTH_CHECK_PORT=8891"
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=0
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hms-nut
+
+[Install]
+WantedBy=multi-user.target
