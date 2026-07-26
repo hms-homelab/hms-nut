@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  hms-nut:
+    build: .
+    image: ghcr.io/hms-homelab/hms-nut:latest
+    container_name: hms-nut
+    restart: unless-stopped
+
+    # Network mode: use host network for NUT access, or configure network below
+    # network_mode: host
+
+    ports:
+      - "8891:8891"  # Health check endpoint
+
+    environment:
+      # NUT Configuration
+      - NUT_HOST=${NUT_HOST:-localhost}
+      - NUT_PORT=${NUT_PORT:-3493}
+      - NUT_UPS_NAME=${NUT_UPS_NAME:-ups@localhost}
+      - NUT_DEVICE_ID=${NUT_DEVICE_ID:-ups}
+      - NUT_DEVICE_NAME=${NUT_DEVICE_NAME:-UPS}
+      - NUT_POLL_INTERVAL=${NUT_POLL_INTERVAL:-60}
+
+      # Multi-device configuration
+      - UPS_DEVICE_IDS=${UPS_DEVICE_IDS:-}
+      - UPS_DB_MAPPING=${UPS_DB_MAPPING:-}
+      - UPS_FRIENDLY_NAMES=${UPS_FRIENDLY_NAMES:-}
+
+      # MQTT Configuration
+      - MQTT_BROKER=${MQTT_BROKER:-localhost}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_USER=${MQTT_USER:-}
+      - MQTT_PASSWORD=${MQTT_PASSWORD:-}
+      - MQTT_CLIENT_ID=${MQTT_CLIENT_ID:-hms_nut_service}
+
+      # Database Configuration
+      - DB_HOST=${DB_HOST:-localhost}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-ups_monitoring}
+      - DB_USER=${DB_USER:-}
+      - DB_PASSWORD=${DB_PASSWORD:-}
+
+      # Service Configuration
+      - COLLECTOR_SAVE_INTERVAL=${COLLECTOR_SAVE_INTERVAL:-3600}
+      - HEALTH_CHECK_PORT=8891
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8891/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Optional: include dependent services
+#  postgres:
+#    image: postgres:15-alpine
+#    container_name: hms-nut-postgres
+#    restart: unless-stopped
+#    environment:
+#      POSTGRES_DB: ups_monitoring
+#      POSTGRES_USER: ${DB_USER:-ups}
+#      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+#    volumes:
+#      - postgres_data:/var/lib/postgresql/data
+#    ports:
+#      - "5432:5432"
+
+#  mosquitto:
+#    image: eclipse-mosquitto:2
+#    container_name: hms-nut-mqtt
+#    restart: unless-stopped
+#    ports:
+#      - "1883:1883"
+#    volumes:
+#      - mosquitto_data:/mosquitto/data
+#      - mosquitto_log:/mosquitto/log
+
+#volumes:
+#  postgres_data:
+#  mosquitto_data:
+#  mosquitto_log:
