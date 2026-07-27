@@ -69,7 +69,7 @@ applied live; the collector re-subscribes its MQTT topics without a service rest
 ### What type of nodes can be added?
 
 Regular NUT servers can be added, pick a Linux system, an arm architecture (maybe a rPI connected to your own APC for truly mobile server)
-For a minimilistic view checktout ![HMS-ESP-APC](https://github.com/hms-homelab/hms-esp-apc) if you own a APC. This will use a single ESP32S3 as a NUT server and will decrypt the HID report from the APC. 30+ entities will be sento to Home Assistant and it can be included as a node here. 
+For a minimilistic view checktout [**HMS-ESP-APC**](https://github.com/hms-homelab/hms-esp-apc) if you own a APC. This will use a single ESP32S3 as a NUT server and will decrypt the HID report from the APC. 30+ entities will be sento to Home Assistant and it can be included as a node here. 
 
 ## Features
 
