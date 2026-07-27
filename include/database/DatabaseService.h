@@ -170,6 +170,33 @@ public:
      */
     Json::Value queryRecentEvents(const std::string& db_identifier, int limit);
 
+    // ─────────────────────────────────────────────────────────────
+    // Daily energy summaries (LLM output, persisted so the web UI can
+    // show history instead of only the last one since service start)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Create the ups_daily_summaries table if it does not exist. Idempotent.
+     */
+    void ensureDailySummaryTable();
+
+    /**
+     * Store (or replace) the generated summary for a date.
+     *
+     * @param date    Summary date in YYYY-MM-DD form (primary key)
+     * @param summary LLM-generated summary text
+     * @param model   Model that produced it (for provenance)
+     */
+    bool saveDailySummary(const std::string& date,
+                          const std::string& summary,
+                          const std::string& model);
+
+    /**
+     * Most recent daily summaries, newest first.
+     * @return JSON array of {date, summary, model, generated_at}
+     */
+    Json::Value queryDailySummaries(int limit);
+
     /**
      * Close database connection
      */

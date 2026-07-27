@@ -1,6 +1,6 @@
 {
   "name": "hms-nut-frontend",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "scripts": {
     "start": "ng serve --proxy-config proxy.conf.json",
     "build": "ng build --configuration production",

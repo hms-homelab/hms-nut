@@ -225,15 +225,48 @@ std::string UpsData::toJson() const {
     oss << std::put_time(std::gmtime(&time_t_val), "%Y-%m-%dT%H:%M:%SZ");
     root["timestamp"] = oss.str();
 
+    // Battery
     if (battery_charge) root["battery_charge"] = *battery_charge;
     if (battery_voltage) root["battery_voltage"] = *battery_voltage;
     if (battery_runtime) root["battery_runtime"] = *battery_runtime;
+    if (battery_nominal_voltage) root["battery_nominal_voltage"] = *battery_nominal_voltage;
+    if (battery_low_threshold) root["battery_low_threshold"] = *battery_low_threshold;
+    if (battery_warning_threshold) root["battery_warning_threshold"] = *battery_warning_threshold;
+    if (battery_type) root["battery_type"] = *battery_type;
+    if (battery_mfr_date) root["battery_mfr_date"] = *battery_mfr_date;
+
+    // Input
     if (input_voltage) root["input_voltage"] = *input_voltage;
+    if (input_nominal_voltage) root["input_nominal_voltage"] = *input_nominal_voltage;
+    if (high_voltage_transfer) root["high_voltage_transfer"] = *high_voltage_transfer;
+    if (low_voltage_transfer) root["low_voltage_transfer"] = *low_voltage_transfer;
+    if (input_sensitivity) root["input_sensitivity"] = *input_sensitivity;
+    if (last_transfer_reason) root["last_transfer_reason"] = *last_transfer_reason;
+
+    // Load & status
     if (load_percentage) root["load_percentage"] = *load_percentage;
     if (load_watts) root["load_watts"] = *load_watts;
     if (ups_status) root["ups_status"] = *ups_status;
     if (power_failure) root["power_failure"] = *power_failure;
+
+    // UPS info
+    if (ups_nominal_power) root["ups_nominal_power"] = *ups_nominal_power;
+    if (beeper_status) root["beeper_status"] = *beeper_status;
+    if (self_test_result) root["self_test_result"] = *self_test_result;
+    if (firmware_version) root["firmware_version"] = *firmware_version;
+    if (delay_shutdown) root["delay_shutdown"] = *delay_shutdown;
+    if (timer_reboot) root["timer_reboot"] = *timer_reboot;
+    if (timer_shutdown) root["timer_shutdown"] = *timer_shutdown;
+
+    // Driver
+    if (driver_name) root["driver_name"] = *driver_name;
+    if (driver_version) root["driver_version"] = *driver_version;
+    if (driver_state) root["driver_state"] = *driver_state;
+
+    // Environment & output
     if (temperature) root["temperature"] = *temperature;
+    if (output_voltage) root["output_voltage"] = *output_voltage;
+    if (output_nominal_voltage) root["output_nominal_voltage"] = *output_nominal_voltage;
 
     Json::StreamWriterBuilder builder;
     return Json::writeString(builder, root);

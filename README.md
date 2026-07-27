@@ -189,6 +189,32 @@ Response:
 }
 ```
 
+### Web UI API
+
+```bash
+# Configured devices + full live metric snapshot for each
+curl http://localhost:8891/api/devices
+
+# History for one node, or several at once (comma-separated).
+# Returns { hours, series: [{ device, friendly_name, points: [...] }], ... }
+# Every stored numeric column is included in each point.
+curl "http://localhost:8891/api/history?device=apc_ups&hours=24"
+curl "http://localhost:8891/api/history?device=apc_ups,office_ups&hours=168"
+
+# Recent power events (device optional = all devices)
+curl "http://localhost:8891/api/events?limit=50"
+
+# Persisted daily energy summaries, newest first
+curl "http://localhost:8891/api/summaries?limit=14"
+
+# Regenerate a summary on demand (defaults to yesterday)
+curl -X POST "http://localhost:8891/api/summary?date=2026-07-25"
+```
+
+The **History** page has two modes: *Per node* (one node, one chart per unit family) and
+*All nodes* (one metric, every node overlaid on a shared axis), both with a min/avg/max
+statistics table for the selected range.
+
 ## Database Schema
 
 Required PostgreSQL table:
@@ -212,6 +238,11 @@ CREATE TABLE ups_metrics (
 CREATE INDEX idx_ups_metrics_device_time
 ON ups_metrics(device_identifier, timestamp DESC);
 ```
+
+Two further tables are created automatically at startup if missing, so no manual step is
+needed: `device_config` (editable device management, seeded once from the `UPS_*` env vars)
+and `ups_daily_summaries` (one row per date, holding the generated energy summary and the
+model that produced it, so the UI can show summary history across restarts).
 
 ## Running Tests
 

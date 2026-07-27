@@ -699,21 +699,51 @@ Json::Value DatabaseService::queryHistory(const std::string& db_identifier, int 
         std::lock_guard<std::mutex> lock(connection_mutex_);
         try {
             pqxx::work txn(*conn_);
+            // Every numeric column insertUpsMetrics() writes, so the UI can chart
+            // any of them — not just the original three.
             std::string q =
                 "SELECT to_char(m.timestamp, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS t, "
-                "m.battery_charge, m.load_percentage, m.input_voltage "
+                "m.battery_charge, m.battery_voltage, m.battery_runtime, "
+                // aliased to the live-metric names so the UI has one vocabulary
+                "m.battery_low_charge_threshold     AS battery_low_threshold, "
+                "m.battery_warning_charge_threshold AS battery_warning_threshold, "
+                "m.input_voltage, m.input_nominal_voltage, "
+                "m.high_voltage_transfer, m.low_voltage_transfer, "
+                "m.load_percentage, m.load_watts, "
+                "m.output_voltage, m.output_nominal_voltage, "
+                "m.temperature, m.power_failure, m.ups_status "
                 "FROM ups_metrics m JOIN ups_devices d ON m.device_id = d.device_id "
                 "WHERE d.device_identifier = " + txn.quote(db_identifier) + " "
                 "AND m.timestamp > now() - INTERVAL '" + std::to_string(hours) + " hours' "
                 "ORDER BY m.timestamp";
             pqxx::result res = txn.exec(q);
             txn.commit();
+
+            // Numeric columns are emitted as number-or-null so the charts can
+            // gap cleanly rather than plotting a bogus zero.
+            static const char* kNumericCols[] = {
+                "battery_charge", "battery_voltage", "battery_runtime",
+                "battery_low_threshold", "battery_warning_threshold",
+                "input_voltage", "input_nominal_voltage",
+                "high_voltage_transfer", "low_voltage_transfer",
+                "load_percentage", "load_watts",
+                "output_voltage", "output_nominal_voltage",
+                "temperature",
+            };
+
             for (const auto& r : res) {
                 Json::Value pt;
                 pt["t"] = r["t"].as<std::string>();
-                pt["battery_charge"]  = r["battery_charge"].is_null()  ? Json::Value(Json::nullValue) : Json::Value(r["battery_charge"].as<double>());
-                pt["load_percentage"] = r["load_percentage"].is_null() ? Json::Value(Json::nullValue) : Json::Value(r["load_percentage"].as<double>());
-                pt["input_voltage"]   = r["input_voltage"].is_null()   ? Json::Value(Json::nullValue) : Json::Value(r["input_voltage"].as<double>());
+                for (const char* col : kNumericCols) {
+                    pt[col] = r[col].is_null() ? Json::Value(Json::nullValue)
+                                               : Json::Value(r[col].as<double>());
+                }
+                pt["power_failure"] = r["power_failure"].is_null()
+                                          ? Json::Value(Json::nullValue)
+                                          : Json::Value(r["power_failure"].as<bool>());
+                pt["ups_status"] = r["ups_status"].is_null()
+                                       ? Json::Value(Json::nullValue)
+                                       : Json::Value(r["ups_status"].as<std::string>());
                 arr.append(pt);
             }
             return true;
@@ -757,6 +787,82 @@ Json::Value DatabaseService::queryRecentEvents(const std::string& db_identifier,
             return true;
         } catch (const std::exception& e) {
             std::cerr << "❌ DB: queryRecentEvents error: " << e.what() << std::endl;
+            return false;
+        }
+    });
+    return arr;
+}
+
+void DatabaseService::ensureDailySummaryTable() {
+    executeWithRetry([&]() -> bool {
+        std::lock_guard<std::mutex> lock(connection_mutex_);
+        try {
+            pqxx::work txn(*conn_);
+            txn.exec(
+                "CREATE TABLE IF NOT EXISTS ups_daily_summaries ("
+                "  summary_date DATE PRIMARY KEY,"
+                "  summary      TEXT NOT NULL,"
+                "  model        TEXT,"
+                "  generated_at TIMESTAMPTZ NOT NULL DEFAULT now()"
+                ")");
+            txn.commit();
+            std::cout << "💾 DB: ups_daily_summaries table ready" << std::endl;
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "❌ DB: ensureDailySummaryTable error: " << e.what() << std::endl;
+            return false;
+        }
+    });
+}
+
+bool DatabaseService::saveDailySummary(const std::string& date,
+                                       const std::string& summary,
+                                       const std::string& model) {
+    return executeWithRetry([&]() -> bool {
+        std::lock_guard<std::mutex> lock(connection_mutex_);
+        try {
+            pqxx::work txn(*conn_);
+            txn.exec(
+                "INSERT INTO ups_daily_summaries (summary_date, summary, model) VALUES (" +
+                txn.quote(date) + ", " + txn.quote(summary) + ", " + txn.quote(model) + ") "
+                "ON CONFLICT (summary_date) DO UPDATE SET "
+                "summary = EXCLUDED.summary, model = EXCLUDED.model, generated_at = now()");
+            txn.commit();
+            std::cout << "💾 DB: saved daily summary for " << date << std::endl;
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "❌ DB: saveDailySummary error: " << e.what() << std::endl;
+            return false;
+        }
+    });
+}
+
+Json::Value DatabaseService::queryDailySummaries(int limit) {
+    if (limit < 1) limit = 1;
+    if (limit > 365) limit = 365;
+    Json::Value arr(Json::arrayValue);
+    executeWithRetry([&]() -> bool {
+        std::lock_guard<std::mutex> lock(connection_mutex_);
+        try {
+            pqxx::work txn(*conn_);
+            pqxx::result res = txn.exec(
+                "SELECT to_char(summary_date, 'YYYY-MM-DD') AS d, summary, model, "
+                "to_char(generated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS g "
+                "FROM ups_daily_summaries ORDER BY summary_date DESC LIMIT " +
+                std::to_string(limit));
+            txn.commit();
+            for (const auto& r : res) {
+                Json::Value s;
+                s["date"]         = r["d"].as<std::string>();
+                s["summary"]      = r["summary"].as<std::string>();
+                s["model"]        = r["model"].is_null() ? Json::Value("")
+                                                         : Json::Value(r["model"].as<std::string>());
+                s["generated_at"] = r["g"].as<std::string>();
+                arr.append(s);
+            }
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "❌ DB: queryDailySummaries error: " << e.what() << std::endl;
             return false;
         }
     });
