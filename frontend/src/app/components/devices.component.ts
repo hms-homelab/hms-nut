@@ -51,7 +51,7 @@ import { NutApiService, DeviceConfig } from '../services/nut-api.service';
       <div class="add-grid">
         <div>
           <label class="muted">MQTT device id *</label>
-          <input [(ngModel)]="add.mqtt_device_id" placeholder="apc_ups_e072a1ead480">
+          <input [(ngModel)]="add.mqtt_device_id" placeholder="apc_ups_001122334455">
         </div>
         <div>
           <label class="muted">DB identifier</label>

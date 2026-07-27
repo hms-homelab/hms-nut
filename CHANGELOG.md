@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-node charts.** `GET /api/history?device=a,b,c` accepts a comma-separated list and
   returns a `series` array (one entry per node) in a single round trip. `device`/`points`
   still mirror the first series, so existing single-device callers are unaffected.
-- **History has two modes**: *Per node* (one node, metrics bucketed by unit — one chart per
+- **History has two modes**: *Per node* (one node, metrics bucketed by unit, one chart per
   unit family, never a dual axis) and *All nodes* (one metric, every node overlaid), each with
   a min/avg/max/last statistics table for the selected range.
 - **Fleet summary strip** on the dashboard: nodes online, total draw, nodes on battery,
@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Daily energy summaries are persisted and surfaced.** New `ups_daily_summaries` table
   (created idempotently at startup), written on every generation. `GET /api/summaries?limit=N`
   returns them newest-first and `POST /api/summary?date=YYYY-MM-DD` regenerates on demand.
-  The dashboard shows the latest summary with earlier ones behind a toggle — previously the
+  The dashboard shows the latest summary with earlier ones behind a toggle. Previously the
   summary only existed in memory and on MQTT, so the n8n relay workflow was the only place
   it ever landed.
 
@@ -108,8 +108,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Database schema supports multiple device identifiers via `device_identifier` field
 - Service configuration updated to collect from 3 UPS devices:
   - `apc_bx` (HMS-NUT local device)
-  - `apc_ups_d0_cf_13_2f_df_dc` (ESP32 #1 - MT300N router)
-  - `apc_ups_d0_cf_13_2f_e0_b0` (ESP32 #2 - ATX1800 router)
+  - `apc_ups_<esp32-1-mac>` (ESP32 #1)
+  - `apc_ups_<esp32-2-mac>` (ESP32 #2)
 
 ### Fixed
 - ESP32 devices were not being collected (service only configured for local NUT device)

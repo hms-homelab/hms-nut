@@ -1,6 +1,6 @@
 # HMS-NUT
 
-A high-performance C++ microservice for UPS (Uninterruptible Power Supply) monitoring via Network UPS Tools (NUT), with MQTT integration for Home Assistant and PostgreSQL storage for analytics.
+A high-performance C++ microservice for UPS (Uninterruptible Power Supply) monitoring via Network UPS Tools (NUT), with MQTT integration for Home Assistant, PostgreSQL storage for analytics, and a built-in web UI.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/)
@@ -8,12 +8,68 @@ A high-performance C++ microservice for UPS (Uninterruptible Power Supply) monit
 [![GHCR](https://img.shields.io/badge/ghcr.io-hms--nut-blue?logo=docker)](https://github.com/hms-homelab/hms-nut/pkgs/container/hms-nut)
 [![Build](https://github.com/hms-homelab/hms-nut/actions/workflows/docker-build.yml/badge.svg)](https://github.com/hms-homelab/hms-nut/actions)
 
+## Screenshots
+
+> All screenshots are from a live three-node deployment (two ESP32-based UPS monitors and
+> one NUT-attached APC unit). Only the MAC-derived device ids are masked.
+
+### Live status
+
+Every configured node at a glance: a fleet roll-up across all of them, the LLM-written daily
+energy summary, and per-node battery/load meters with 24-hour trend sparklines and a
+last-seen indicator.
+
+![Live status dashboard](images/dashboard.png)
+
+### Every metric the device reports
+
+UPS firmware exposes far more than charge and load. Each card expands into the complete
+reported set, grouped by Battery / Input / Output / Load / UPS / Driver / Environment:
+nominal and transfer voltages, battery type and manufacture date, self-test result, beeper
+state, firmware and driver versions, shutdown and reboot timers.
+
+![All metrics expanded on a device card](images/dashboard-all-metrics.png)
+
+### History: one node, every metric
+
+Metrics are bucketed by unit family and each family gets its own chart with a single y-axis,
+so percentages, AC volts, battery volts, watts, runtime and temperature are never forced onto
+a shared scale. Pick any subset; a min/avg/max/last table accompanies the range.
+
+![Per-node history charts](images/history-per-node.png)
+
+### History: every node on one chart
+
+Switch to *All nodes* to overlay the same metric across the whole fleet, which is how you spot
+the one unit that behaved differently.
+
+![All nodes overlaid on load percentage](images/history-all-nodes.png)
+
+Any stored metric works, over any range. Here is input voltage across seven days:
+
+![Input voltage across all nodes over 7 days](images/history-input-voltage-7d.png)
+
+### Device management
+
+Add, rename, enable/disable or remove devices from the browser. Changes are persisted and
+applied live; the collector re-subscribes its MQTT topics without a service restart.
+
+![Device management](images/devices.png)
+
 ## Features
 
 - **NUT Integration**: Polls Network UPS Tools daemon for real-time UPS metrics
 - **MQTT Discovery**: Auto-registers sensors with Home Assistant via MQTT discovery protocol
 - **Multi-Device Support**: Monitor multiple UPS devices (NUT + ESP32-based monitors)
+- **Web UI**: Angular dashboard served by the service itself: live status, history charts,
+  power events and device management, no extra container or reverse proxy
+- **Complete Telemetry**: Every field the UPS reports is collected, stored, served and charted
+- **Cross-Node Comparison**: Overlay any metric across every monitored UPS on one chart
+- **Daily Energy Summary**: Optional LLM-written summary of the previous day's power quality,
+  persisted and published to MQTT for Home Assistant
 - **PostgreSQL Storage**: Historical data persistence for ML analytics and dashboards
+- **Optional NUT Bridge**: Run MQTT-only with `NUT_ENABLED=false` when there is no locally
+  attached UPS
 - **Low Memory Footprint**: ~3 MB RAM usage
 - **Configurable**: All settings via environment variables
 
@@ -23,9 +79,12 @@ A high-performance C++ microservice for UPS (Uninterruptible Power Supply) monit
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
 │   NUT Server    │────▶│    HMS-NUT      │────▶│   PostgreSQL    │
 │   (upsd)        │     │   C++ Service   │     │   Database      │
-└─────────────────┘     └────────┬────────┘     └─────────────────┘
-                                 │
-                                 ▼
+└─────────────────┘     └───┬────────┬────┘     └─────────────────┘
+                            │        │
+   ESP32 UPS monitors ──────┘        ├────────▶ ┌─────────────────┐
+   (MQTT, no NUT needed)             │          │  Web UI (SPA)   │
+                                     │          │  :8891          │
+                                     ▼          └─────────────────┘
                         ┌─────────────────┐     ┌─────────────────┐
                         │   MQTT Broker   │────▶│ Home Assistant  │
                         │   (Mosquitto)   │     │   Dashboard     │
@@ -83,6 +142,7 @@ All configuration is done via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `NUT_ENABLED` | `true` | Set `false` to run MQTT-only with no NUT bridge |
 | `NUT_HOST` | `localhost` | NUT server hostname |
 | `NUT_PORT` | `3493` | NUT server port |
 | `NUT_UPS_NAME` | `ups@localhost` | UPS name in NUT format |
@@ -130,8 +190,25 @@ UPS_FRIENDLY_NAMES='{"main_ups": "Main Server UPS", "rack_ups": "Network Rack UP
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `COLLECTOR_SAVE_INTERVAL` | `3600` | DB save interval (seconds) |
-| `HEALTH_CHECK_PORT` | `8891` | HTTP health check port |
+| `HEALTH_CHECK_PORT` | `8891` | HTTP port for the health check, REST API and web UI |
+| `WEB_STATIC_DIR` | `./static` | Directory holding the built web UI |
 | `LOG_LEVEL` | `info` | Log level (debug/info/warn/error) |
+
+### Daily Energy Summary (optional)
+
+When enabled, the service queries the previous day's metrics for every device once per day,
+asks an LLM to summarise power quality, stores the result in `ups_daily_summaries`, shows it
+in the web UI and publishes it to MQTT for Home Assistant.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_ENABLED` | `false` | Enable the daily summary |
+| `LLM_PROVIDER` | `ollama` | `ollama`, `openai`, `gemini` or `anthropic` |
+| `LLM_ENDPOINT` | `http://localhost:11434` | Provider endpoint |
+| `LLM_MODEL` | `llama3.1:8b-instruct-q4_K_M` | Model name |
+| `LLM_API_KEY` | - | API key (not needed for a local Ollama) |
+| `LLM_PROMPT_FILE` | `llm_prompt.txt` | Prompt template; must contain `{metrics}` |
+| `SUMMARY_HOUR` | `7` | Hour of day (0-23) to generate the summary |
 
 ## Sensors Published
 
