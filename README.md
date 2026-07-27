@@ -21,6 +21,16 @@ last-seen indicator.
 
 ![Live status dashboard](images/dashboard.png)
 
+### Daily energy summary
+
+With `LLM_ENABLED=true`, the service feeds the previous day's aggregates for every device to
+an LLM once a day and writes the result to `ups_daily_summaries`. Summaries are kept, so the
+card shows the latest with earlier days behind a toggle, and each records the model that
+produced it. The same text is published to MQTT for Home Assistant, and **Regenerate** reruns
+any date on demand.
+
+![Daily energy summary with history](images/daily-summary.png)
+
 ### Every metric the device reports
 
 UPS firmware exposes far more than charge and load. Each card expands into the complete
