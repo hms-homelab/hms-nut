@@ -17,7 +17,7 @@ namespace hms_nut {
  * DeviceConfigRow - a persisted device-management entry (device_config table)
  */
 struct DeviceConfigRow {
-    std::string mqtt_device_id;   // MQTT topic prefix (e.g., "apc_ups_e072a1ead480")
+    std::string mqtt_device_id;   // MQTT topic prefix (e.g., "apc_ups_001122334455")
     std::string db_identifier;    // PostgreSQL device_identifier
     std::string friendly_name;    // Human-readable name
     bool enabled = true;          // whether the collector should monitor it
