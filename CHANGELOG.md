@@ -5,6 +5,35 @@ All notable changes to HMS-NUT will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-07-27
+
+### Added
+- **Every reported metric is now exposed and shown.** `UpsData::toJson()` emitted only 9 of
+  the ~30 fields the collector holds, so `/api/devices` silently dropped nominal voltages,
+  transfer thresholds, battery type/date, self-test, beeper, firmware, driver info, output
+  voltage and the shutdown/reboot timers. All of them are serialized now, and each dashboard
+  card gets a collapsible **Show all metrics** panel grouped by
+  Battery / Input / Output / Load / UPS / Driver / Environment.
+- **Full metric history.** `queryHistory()` selected 3 of the 22 columns `insertUpsMetrics()`
+  writes; it now returns every stored numeric column plus `ups_status` / `power_failure`.
+  The two threshold columns are aliased to their live-metric names so the UI has one vocabulary.
+- **Multi-node charts.** `GET /api/history?device=a,b,c` accepts a comma-separated list and
+  returns a `series` array (one entry per node) in a single round trip. `device`/`points`
+  still mirror the first series, so existing single-device callers are unaffected.
+- **History has two modes**: *Per node* (one node, metrics bucketed by unit — one chart per
+  unit family, never a dual axis) and *All nodes* (one metric, every node overlaid), each with
+  a min/avg/max/last statistics table for the selected range.
+- **Fleet summary strip** on the dashboard: nodes online, total draw, nodes on battery,
+  lowest battery, shortest runtime, stale count.
+- **24 h sparklines** for battery and load on each card, and a **last-seen / stale** indicator
+  driven by the live metric timestamp.
+- **Daily energy summaries are persisted and surfaced.** New `ups_daily_summaries` table
+  (created idempotently at startup), written on every generation. `GET /api/summaries?limit=N`
+  returns them newest-first and `POST /api/summary?date=YYYY-MM-DD` regenerates on demand.
+  The dashboard shows the latest summary with earlier ones behind a toggle — previously the
+  summary only existed in memory and on MQTT, so the n8n relay workflow was the only place
+  it ever landed.
+
 ## [1.3.0] - 2026-07-24
 
 ### Added

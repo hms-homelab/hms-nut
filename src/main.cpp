@@ -19,7 +19,7 @@
 
 using namespace hms_nut;
 
-#define HMS_NUT_VERSION "1.3.0"
+#define HMS_NUT_VERSION "1.4.0"
 
 // Global services for signal handler
 std::unique_ptr<NutBridgeService> g_nut_bridge;
@@ -56,6 +56,22 @@ static bool isValidDeviceId(const std::string& id) {
         }
     }
     return true;
+}
+
+// Split a comma-separated device list, trimming blanks and dropping invalid ids.
+static std::vector<std::string> splitCsv(const std::string& csv) {
+    std::vector<std::string> out;
+    std::istringstream iss(csv);
+    std::string item;
+    while (std::getline(iss, item, ',')) {
+        // trim surrounding whitespace
+        size_t b = item.find_first_not_of(" \t");
+        size_t e = item.find_last_not_of(" \t");
+        if (b == std::string::npos) continue;
+        std::string id = item.substr(b, e - b + 1);
+        if (isValidDeviceId(id)) out.push_back(id);
+    }
+    return out;
 }
 
 // Send a Json::Value as an application/json response with a status code.
@@ -210,6 +226,7 @@ int main() {
         {
             auto& db = DatabaseService::getInstance();
             db.ensureDeviceConfigTable();
+            db.ensureDailySummaryTable();
 
             std::vector<DeviceConfigRow> seed;
             for (const auto& mqtt_id : DeviceMapper::getDeviceIds()) {
@@ -508,7 +525,12 @@ int main() {
             },
             {drogon::Get});
 
-        // GET /api/history?device=<mqtt_id>&hours=N
+        // GET /api/history?device=<mqtt_id>[,<mqtt_id>…]&hours=N
+        //
+        // Accepts a comma-separated device list so the UI can overlay several
+        // nodes on one chart in a single round trip. The response always carries
+        // `series` (one entry per requested device); `device`/`points` mirror the
+        // first series so existing single-device callers keep working.
         drogon::app().registerHandler(
             "/api/history",
             [](const drogon::HttpRequestPtr& req,
@@ -519,17 +541,120 @@ int main() {
                     sendJson(callback, err, drogon::k400BadRequest);
                     return;
                 }
+
+                std::vector<std::string> devices = splitCsv(device);
+                if (devices.empty()) {
+                    Json::Value err; err["error"] = "no valid device ids in 'device'";
+                    sendJson(callback, err, drogon::k400BadRequest);
+                    return;
+                }
+                // Bound the fan-out — one DB round trip per device.
+                if (devices.size() > 16) devices.resize(16);
+
                 int hours = 24;
                 std::string h = req->getParameter("hours");
                 if (!h.empty()) hours = std::atoi(h.c_str());
-                std::string db_id = DeviceMapper::getDbIdentifier(device);
+
+                auto& db = DatabaseService::getInstance();
+                Json::Value series(Json::arrayValue);
+                for (const auto& mqtt_id : devices) {
+                    std::string db_id = DeviceMapper::getDbIdentifier(mqtt_id);
+                    Json::Value s;
+                    s["device"]        = mqtt_id;
+                    s["db_identifier"] = db_id;
+                    s["friendly_name"] = DeviceMapper::getFriendlyName(mqtt_id);
+                    s["points"]        = db.queryHistory(db_id, hours);
+                    series.append(s);
+                }
+
                 Json::Value out;
-                out["device"] = device;
-                out["hours"] = hours;
-                out["points"] = DatabaseService::getInstance().queryHistory(db_id, hours);
+                out["hours"]  = hours;
+                out["series"] = series;
+                out["device"] = series[0]["device"];   // back-compat
+                out["points"] = series[0]["points"];   // back-compat
                 sendJson(callback, out);
             },
             {drogon::Get});
+
+        // GET /api/summaries?limit=N — persisted daily energy summaries, newest first.
+        // The live in-memory summary is folded in when it is newer than what the DB
+        // holds (e.g. the DB write failed, or LLM ran before the table existed).
+        drogon::app().registerHandler(
+            "/api/summaries",
+            [](const drogon::HttpRequestPtr& req,
+               std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+                int limit = 14;
+                std::string l = req->getParameter("limit");
+                if (!l.empty()) limit = std::atoi(l.c_str());
+
+                Json::Value out;
+                out["enabled"] = g_daily_summary && g_daily_summary->isRunning();
+                Json::Value stored = DatabaseService::getInstance().queryDailySummaries(limit);
+
+                if (g_daily_summary) {
+                    std::string live_date = g_daily_summary->getLastSummaryDate();
+                    std::string live_text = g_daily_summary->getLastSummary();
+                    if (!live_date.empty() && !live_text.empty()) {
+                        bool present = false;
+                        for (const auto& s : stored) {
+                            if (s["date"].asString() == live_date) { present = true; break; }
+                        }
+                        if (!present) {
+                            Json::Value s;
+                            s["date"] = live_date;
+                            s["summary"] = live_text;
+                            s["model"] = "";
+                            s["generated_at"] = "";
+                            // Newest first — the live one covers the most recent run.
+                            Json::Value merged(Json::arrayValue);
+                            merged.append(s);
+                            for (const auto& e : stored) merged.append(e);
+                            stored = merged;
+                        }
+                    }
+                }
+
+                out["summaries"] = stored;
+                sendJson(callback, out);
+            },
+            {drogon::Get});
+
+        // POST /api/summary?date=YYYY-MM-DD — generate on demand from the UI.
+        // Mirrors POST /summary but lives under /api so it shares the SPA proxy.
+        drogon::app().registerHandler(
+            "/api/summary",
+            [](const drogon::HttpRequestPtr& req,
+               std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+                Json::Value out;
+                if (!g_daily_summary || !g_daily_summary->isRunning()) {
+                    out["success"] = false;
+                    out["message"] = "daily summary service not running (LLM_ENABLED=false?)";
+                    sendJson(callback, out, drogon::k503ServiceUnavailable);
+                    return;
+                }
+
+                std::string date = req->getParameter("date");
+                if (date.empty()) {
+                    auto yesterday = std::chrono::system_clock::now() - std::chrono::hours(24);
+                    auto yesterday_t = std::chrono::system_clock::to_time_t(yesterday);
+                    std::tm yesterday_tm;
+                    localtime_r(&yesterday_t, &yesterday_tm);
+                    std::ostringstream oss;
+                    oss << std::put_time(&yesterday_tm, "%Y-%m-%d");
+                    date = oss.str();
+                }
+
+                bool ok = g_daily_summary->generateSummary(date);
+                out["success"] = ok;
+                out["date"] = date;
+                if (ok) {
+                    out["summary"] = g_daily_summary->getLastSummary();
+                } else {
+                    out["message"] = "summary generation failed (no metrics for that date, or LLM error)";
+                }
+                sendJson(callback, out, ok ? drogon::k200OK : drogon::k500InternalServerError);
+            },
+            {drogon::Post});
 
         // GET /api/events?device=<mqtt_id>&limit=N   (device optional = all)
         drogon::app().registerHandler(

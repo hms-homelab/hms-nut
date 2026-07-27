@@ -17,6 +17,8 @@ DailySummaryService::DailySummaryService(std::shared_ptr<MqttClient> mqtt_client
       summary_hour_(summary_hour),
       prompt_file_(prompt_file) {
 
+    llm_model_ = llm_config.model;
+
     if (llm_config.enabled) {
         llm_client_ = std::make_unique<hms::LLMClient>(llm_config);
         std::cout << "🤖 DailySummary: LLM enabled ("
@@ -88,6 +90,11 @@ std::chrono::system_clock::time_point DailySummaryService::getLastSummaryTime() 
 std::string DailySummaryService::getLastSummary() const {
     std::lock_guard<std::mutex> lock(state_mutex_);
     return last_summary_;
+}
+
+std::string DailySummaryService::getLastSummaryDate() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return last_summary_for_date_;
 }
 
 void DailySummaryService::publishDiscovery() {
@@ -197,11 +204,17 @@ bool DailySummaryService::generateSummary(const std::string& date) {
         std::cerr << "⚠️  DailySummary: MQTT not connected, summary not published" << std::endl;
     }
 
+    // Persist so the web UI can show summary history, not just the most recent
+    // one since process start. A DB failure must not fail the whole generation —
+    // the summary already went out over MQTT.
+    db_service_.saveDailySummary(date, summary, llm_model_);
+
     // Update state
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         last_summary_time_ = std::chrono::system_clock::now();
         last_summary_ = summary;
+        last_summary_for_date_ = date;
     }
 
     return true;

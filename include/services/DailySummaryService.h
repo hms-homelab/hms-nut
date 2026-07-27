@@ -55,6 +55,9 @@ public:
     /// Get last summary text
     std::string getLastSummary() const;
 
+    /// Get the date (YYYY-MM-DD) the last summary covers
+    std::string getLastSummaryDate() const;
+
     /// Publish HA MQTT discovery config for the summary sensor
     void publishDiscovery();
 
@@ -77,6 +80,7 @@ private:
     int summary_hour_;
     std::string prompt_file_;
     std::string prompt_template_;
+    std::string llm_model_;  // recorded alongside each persisted summary
 
     // State
     std::thread timer_thread_;
@@ -85,6 +89,7 @@ private:
     mutable std::mutex state_mutex_;
     std::chrono::system_clock::time_point last_summary_time_;
     std::string last_summary_;
+    std::string last_summary_for_date_;  // the date the summary covers
 };
 
 }  // namespace hms_nut
