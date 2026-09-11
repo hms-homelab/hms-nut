@@ -5,6 +5,20 @@ All notable changes to HMS-NUT will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-09-11
+
+### Fixed
+- **Battery nominal voltage is persisted again.** It was collected over MQTT and shown on the
+  live dashboard, but `insertUpsMetrics()` never wrote the `battery_nominal_voltage` column, so
+  the database has had no value for it since the previous Python collector was retired. Anything
+  that reads `ups_metrics` for it (such as voltage-deviation analysis) saw only NULLs.
+- **Battery nominal voltage appears in history.** `queryHistory()` now returns the column, so
+  its history chart is no longer empty.
+- **DB integration test can be re-run.** `test_device_config_db` used a fixed device name, and
+  since `ups_devices` rows are kept for history and `device_name` is unique, every run after the
+  first failed. Names are now unique per run and teardown removes the rows the test created.
+  Added `BatteryNominalVoltageRoundTrips`.
+
 ## [1.4.0] - 2026-07-27
 
 ### Added

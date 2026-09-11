@@ -219,7 +219,7 @@ bool DatabaseService::insertUpsMetrics(const UpsData& data, const std::string& d
             // Build INSERT query with ON CONFLICT
             std::ostringstream query;
             query << "INSERT INTO ups_metrics (device_id, timestamp, "
-                  << "battery_charge, battery_voltage, battery_runtime, "
+                  << "battery_charge, battery_voltage, battery_nominal_voltage, battery_runtime, "
                   << "battery_low_charge_threshold, battery_warning_charge_threshold, "
                   << "input_voltage, input_nominal_voltage, "
                   << "high_voltage_transfer, low_voltage_transfer, input_sensitivity, "
@@ -252,6 +252,7 @@ bool DatabaseService::insertUpsMetrics(const UpsData& data, const std::string& d
             // Battery metrics
             addOptional(data.battery_charge);
             addOptional(data.battery_voltage);
+            addOptional(data.battery_nominal_voltage);
             addOptional(data.battery_runtime);
             addOptional(data.battery_low_threshold);
             addOptional(data.battery_warning_threshold);
@@ -287,6 +288,7 @@ bool DatabaseService::insertUpsMetrics(const UpsData& data, const std::string& d
             query << ") ON CONFLICT (device_id, timestamp) DO UPDATE SET "
                   << "battery_charge = EXCLUDED.battery_charge, "
                   << "battery_voltage = EXCLUDED.battery_voltage, "
+                  << "battery_nominal_voltage = EXCLUDED.battery_nominal_voltage, "
                   << "battery_runtime = EXCLUDED.battery_runtime, "
                   << "load_percentage = EXCLUDED.load_percentage, "
                   << "load_watts = EXCLUDED.load_watts, "
@@ -703,7 +705,7 @@ Json::Value DatabaseService::queryHistory(const std::string& db_identifier, int 
             // any of them — not just the original three.
             std::string q =
                 "SELECT to_char(m.timestamp, 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS t, "
-                "m.battery_charge, m.battery_voltage, m.battery_runtime, "
+                "m.battery_charge, m.battery_voltage, m.battery_nominal_voltage, m.battery_runtime, "
                 // aliased to the live-metric names so the UI has one vocabulary
                 "m.battery_low_charge_threshold     AS battery_low_threshold, "
                 "m.battery_warning_charge_threshold AS battery_warning_threshold, "
@@ -722,7 +724,7 @@ Json::Value DatabaseService::queryHistory(const std::string& db_identifier, int 
             // Numeric columns are emitted as number-or-null so the charts can
             // gap cleanly rather than plotting a bogus zero.
             static const char* kNumericCols[] = {
-                "battery_charge", "battery_voltage", "battery_runtime",
+                "battery_charge", "battery_voltage", "battery_nominal_voltage", "battery_runtime",
                 "battery_low_threshold", "battery_warning_threshold",
                 "input_voltage", "input_nominal_voltage",
                 "high_voltage_transfer", "low_voltage_transfer",
