@@ -10,7 +10,9 @@
 #include <gtest/gtest.h>
 #include "database/DatabaseService.h"
 #include "nut/UpsData.h"
+#include <chrono>
 #include <cstdlib>
+#include <pqxx/pqxx>
 #include <string>
 #include <unistd.h>
 
@@ -49,11 +51,26 @@ protected:
         db.deleteDeviceConfig(test_id);  // clean slate
     }
 
+    // deleteDeviceConfig() deliberately retains the ups_devices row (history),
+    // and ups_devices.device_name is UNIQUE, so a retained "Test UPS" row made
+    // every later run fail. Remove what this test created: metrics (FK) first.
     void TearDown() override {
-        if (connected) {
-            DatabaseService::getInstance().deleteDeviceConfig(test_id);
-        }
+        if (!connected) return;
+        DatabaseService::getInstance().deleteDeviceConfig(test_id);
+        pqxx::connection c(
+            "host=" + envOr("DB_HOST", "localhost") + " port=" + envOr("DB_PORT", "5432") +
+            " dbname=" + envOr("DB_NAME", "ups_monitoring") + " user=" + envOr("DB_USER", "maestro") +
+            " password=" + std::string(std::getenv("DB_PASSWORD")));
+        pqxx::work txn(c);
+        const std::string ids = "(SELECT device_id FROM ups_devices WHERE device_identifier = " +
+                                txn.quote(test_id + "_db") + ")";
+        txn.exec("DELETE FROM ups_metrics WHERE device_id IN " + ids);
+        txn.exec("DELETE FROM ups_devices WHERE device_identifier = " + txn.quote(test_id + "_db"));
+        txn.commit();
     }
+
+    // Unique per run: ups_devices.device_name is UNIQUE.
+    std::string friendlyName() const { return "Test UPS " + test_id; }
 };
 
 TEST_F(DeviceConfigDbTest, UpsertListEnableUpdateDelete) {
@@ -62,7 +79,7 @@ TEST_F(DeviceConfigDbTest, UpsertListEnableUpdateDelete) {
     DeviceConfigRow row;
     row.mqtt_device_id = test_id;
     row.db_identifier  = test_id + "_db";
-    row.friendly_name  = "Test UPS";
+    row.friendly_name  = friendlyName();
     row.enabled        = true;
     ASSERT_TRUE(db.upsertDeviceConfig(row));
 
@@ -72,7 +89,7 @@ TEST_F(DeviceConfigDbTest, UpsertListEnableUpdateDelete) {
         if (r.mqtt_device_id == test_id) {
             found = true;
             EXPECT_EQ(r.db_identifier, test_id + "_db");
-            EXPECT_EQ(r.friendly_name, "Test UPS");
+            EXPECT_EQ(r.friendly_name, friendlyName());
             EXPECT_TRUE(r.enabled);
         }
     }
@@ -88,12 +105,12 @@ TEST_F(DeviceConfigDbTest, UpsertListEnableUpdateDelete) {
     }
 
     // Re-upsert with a new name + re-enable
-    row.friendly_name = "Renamed UPS";
+    row.friendly_name = "Renamed " + friendlyName();
     row.enabled = true;
     ASSERT_TRUE(db.upsertDeviceConfig(row));
     bool renamed = false;
     for (const auto& r : db.listDeviceConfigs(true)) {
-        if (r.mqtt_device_id == test_id) renamed = (r.friendly_name == "Renamed UPS" && r.enabled);
+        if (r.mqtt_device_id == test_id) renamed = (r.friendly_name == "Renamed " + friendlyName() && r.enabled);
     }
     EXPECT_TRUE(renamed);
 
@@ -102,6 +119,36 @@ TEST_F(DeviceConfigDbTest, UpsertListEnableUpdateDelete) {
     for (const auto& r : db.listDeviceConfigs(true)) {
         EXPECT_NE(r.mqtt_device_id, test_id);
     }
+}
+
+// battery_nominal_voltage was collected and shown live but never written by
+// insertUpsMetrics() nor read by queryHistory(), so ups_metrics had no value
+// for it after the old Python collector was retired (2026-02-14).
+TEST_F(DeviceConfigDbTest, BatteryNominalVoltageRoundTrips) {
+    auto& db = DatabaseService::getInstance();
+    const std::string db_id = test_id + "_db";
+
+    DeviceConfigRow row;
+    row.mqtt_device_id = test_id;
+    row.db_identifier  = db_id;
+    row.friendly_name  = friendlyName();
+    row.enabled        = true;
+    ASSERT_TRUE(db.upsertDeviceConfig(row));  // ensures the ups_devices FK row
+
+    UpsData data;
+    data.timestamp = std::chrono::system_clock::now();
+    data.battery_charge = 100.0;
+    data.battery_voltage = 13.71;
+    data.battery_nominal_voltage = 12.0;
+    data.input_nominal_voltage = 120;
+    ASSERT_TRUE(db.insertUpsMetrics(data, db_id));
+
+    Json::Value hist = db.queryHistory(db_id, 1);
+    ASSERT_TRUE(hist.isArray());
+    ASSERT_EQ(hist.size(), 1u);
+    ASSERT_TRUE(hist[0].isMember("battery_nominal_voltage"));
+    EXPECT_DOUBLE_EQ(hist[0]["battery_nominal_voltage"].asDouble(), 12.0);
+    EXPECT_DOUBLE_EQ(hist[0]["input_nominal_voltage"].asDouble(), 120.0);
 }
 
 TEST_F(DeviceConfigDbTest, HistoryAndEventsReturnArrays) {
