@@ -6,35 +6,61 @@
 /*
  * Broker details for the integration tests.
  *
- * Everything comes from the environment. Nothing here carries a real host or
- * credential, so this file is safe to commit to a public repo. Point the tests
- * at a broker with:
+ * Everything comes from test-only environment variables. Nothing here carries
+ * a real host or credential, so this file is safe to commit to a public repo.
+ * Point the tests at a throwaway broker with:
  *
- *   MQTT_BROKER=192.168.x.x MQTT_USER=someuser MQTT_PASSWORD=secret ./run_tests
+ *   docker run -d --rm --name hmsnut-test-mosq -p 18883:1883 \
+ *       eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf
+ *   HMS_NUT_TEST_MQTT_HOST=127.0.0.1 HMS_NUT_TEST_MQTT_PORT=18883 ctest
  *
- * Tests that cannot reach a broker are expected to GTEST_SKIP().
+ * There is deliberately no default host, and the service's own variables
+ * (MQTT_BROKER, MQTT_USER, ...) are never read: a test that publishes retained
+ * homeassistant/status or discovery messages must never land on a real broker
+ * because a shell happened to export the service's settings. With
+ * HMS_NUT_TEST_MQTT_HOST unset, every broker test GTEST_SKIP()s.
  */
+
+inline std::string mqtt_test_env(const char *key)
+{
+    const char *v = std::getenv(key);
+    return (v && *v) ? v : "";
+}
+
+inline bool mqtt_test_configured()
+{
+    return !mqtt_test_env("HMS_NUT_TEST_MQTT_HOST").empty();
+}
 
 inline std::string mqtt_test_broker()
 {
-    const char *v = std::getenv("MQTT_BROKER");
-    return (v && *v) ? v : "127.0.0.1";
+    return mqtt_test_env("HMS_NUT_TEST_MQTT_HOST");
+}
+
+inline std::string mqtt_test_port()
+{
+    std::string port = mqtt_test_env("HMS_NUT_TEST_MQTT_PORT");
+    return port.empty() ? "18883" : port;
 }
 
 inline std::string mqtt_test_url()
 {
-    return "tcp://" + mqtt_test_broker() + ":1883";
+    if (!mqtt_test_configured()) return "";
+    return "tcp://" + mqtt_test_broker() + ":" + mqtt_test_port();
 }
 
 inline std::string mqtt_test_user()
 {
-    const char *v = std::getenv("MQTT_USER");
-    if (!v || !*v) v = std::getenv("MQTT_USERNAME");
-    return (v && *v) ? v : "";
+    return mqtt_test_env("HMS_NUT_TEST_MQTT_USER");
 }
 
 inline std::string mqtt_test_password()
 {
-    const char *v = std::getenv("MQTT_PASSWORD");
-    return (v && *v) ? v : "";
+    return mqtt_test_env("HMS_NUT_TEST_MQTT_PASSWORD");
 }
+
+#define SKIP_WITHOUT_TEST_BROKER()                                            \
+    do {                                                                      \
+        if (!mqtt_test_configured())                                          \
+            GTEST_SKIP() << "HMS_NUT_TEST_MQTT_HOST not set, no test broker"; \
+    } while (0)

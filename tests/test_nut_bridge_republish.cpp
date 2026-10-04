@@ -58,8 +58,9 @@ TEST_F(NutBridgeRepublishTest, RepublishFailsWhenMqttNotConnected) {
 TEST_F(NutBridgeRepublishTest, DISABLED_RepublishSucceedsWhenMqttConnected) {
     // This is an integration test that requires MQTT broker to be running
     // Disabled by default, can be enabled for integration testing
+    SKIP_WITHOUT_TEST_BROKER();
 
-    // Connect to local MQTT broker
+    // Connect to the test broker
     bool connected = mqtt_client_->connect(
         mqtt_test_url(),
         mqtt_test_user(),

@@ -19,7 +19,7 @@
 
 using namespace hms_nut;
 
-#define HMS_NUT_VERSION "1.4.1"
+#define HMS_NUT_VERSION "1.4.2"
 
 // Global services for signal handler
 std::unique_ptr<NutBridgeService> g_nut_bridge;

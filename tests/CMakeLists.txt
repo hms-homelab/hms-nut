@@ -132,7 +132,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 include(FetchContent)
 FetchContent_Declare(hms_shared
     GIT_REPOSITORY https://github.com/hms-homelab/hms-shared.git
-    GIT_TAG        main
+    GIT_TAG        v1.6.18
 )
 FetchContent_Populate(hms_shared)
 
@@ -195,6 +195,11 @@ add_test(NAME AsyncSubscriptionTests COMMAND test_async_subscriptions)
 add_test(NAME HTTPEndpointTests COMMAND test_http_endpoints)
 add_test(NAME DailySummaryTests COMMAND test_daily_summary)
 add_test(NAME DeviceConfigDbTests COMMAND test_device_config_db)
+
+# The broker tests exercise MqttClient's threading; a deadlock there must fail
+# the run, not freeze it.
+set_tests_properties(NutBridgeRepublishTests HAStatusSubscriptionTests AsyncSubscriptionTests
+    PROPERTIES TIMEOUT 120)
 
 # Daily Summary E2E tests (requires running service + Ollama)
 add_executable(test_daily_summary_e2e

@@ -11,6 +11,10 @@ using namespace hms_nut;
 class HAStatusSubscriptionTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        // These tests publish a retained homeassistant/status, so they only
+        // ever run against an explicitly configured test broker.
+        SKIP_WITHOUT_TEST_BROKER();
+
         // Connect to MQTT broker for integration testing
         mqtt_client_ = std::make_shared<MqttClient>("test_ha_status_subscription");
         mqtt_connected_ = mqtt_client_->connect(

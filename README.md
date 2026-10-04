@@ -346,6 +346,15 @@ make
 ctest --output-on-failure
 ```
 
+The MQTT tests skip unless `HMS_NUT_TEST_MQTT_HOST` names a broker; they publish retained
+messages, so use a throwaway one, never the broker Home Assistant uses:
+
+```bash
+docker run -d --rm --name hmsnut-test-mosq -p 18883:1883 \
+    eclipse-mosquitto:2 mosquitto -c /mosquitto-no-auth.conf
+HMS_NUT_TEST_MQTT_HOST=127.0.0.1 HMS_NUT_TEST_MQTT_PORT=18883 ctest --output-on-failure
+```
+
 ## Docker
 
 Build and run with Docker:

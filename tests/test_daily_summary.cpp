@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "llm_client.h"
 #include "database/DatabaseService.h"
+#include <cstdlib>
 #include <string>
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -120,15 +121,29 @@ TEST_F(LLMClientUnitTest, ClientReportsEnabledWhenEnabled) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Integration tests (need PostgreSQL at localhost:5432/ups_monitoring)
+// Integration tests (need PostgreSQL). Connection comes from DB_HOST/DB_PORT/
+// DB_NAME/DB_USER/DB_PASSWORD, like test_device_config_db; nothing is
+// hardcoded, and they SKIP when DB_PASSWORD is unset.
 // ═══════════════════════════════════════════════════════════════════════
+
+static std::string envOr(const char* key, const char* def) {
+    const char* v = std::getenv(key);
+    return (v && *v) ? std::string(v) : std::string(def);
+}
 
 class DatabaseDailySummaryTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        const char* pw = std::getenv("DB_PASSWORD");
+        if (!pw || !*pw) {
+            GTEST_SKIP() << "DB_PASSWORD not set, skipping DB integration test";
+        }
         auto& db = hms_nut::DatabaseService::getInstance();
-        db.initialize("host=localhost port=5432 dbname=ups_monitoring "
-                      "user=maestro password=REDACTED");
+        db.initialize("host=" + envOr("DB_HOST", "localhost") +
+                      " port=" + envOr("DB_PORT", "5432") +
+                      " dbname=" + envOr("DB_NAME", "ups_monitoring") +
+                      " user=" + envOr("DB_USER", "postgres") +
+                      " password=" + pw);
         connected_ = db.isConnected();
     }
 

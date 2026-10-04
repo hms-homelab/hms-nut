@@ -16,36 +16,49 @@ MqttClient::~MqttClient() {
     disconnect();
 }
 
+std::shared_ptr<mqtt::async_client> MqttClient::currentClient() const {
+    std::lock_guard<std::mutex> lock(connection_mutex_);
+    return client_;
+}
+
 bool MqttClient::connect(const std::string& broker_address,
                          const std::string& username,
                          const std::string& password) {
-    std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
-
-    broker_address_ = broker_address;
-    username_ = username;
-    password_ = password;
-
     std::cout << "📡 MQTT: Connecting to " << broker_address << "..." << std::endl;
 
+    // A client this call replaces is destroyed only when this function
+    // returns, after the lock below is released: destroying it is a Paho call.
+    std::shared_ptr<mqtt::async_client> replaced;
+
     try {
-        // Create client with unique ID + timestamp
+        // Create client with unique ID + timestamp. It is built and wired up
+        // before it is published to other threads, without our lock.
         std::string full_client_id = client_id_ + "_" + std::to_string(std::time(nullptr));
-        client_ = std::make_unique<mqtt::async_client>(broker_address, full_client_id);
+        auto client = std::make_shared<mqtt::async_client>(broker_address, full_client_id);
 
         // Set callbacks
-        client_->set_message_callback([this](mqtt::const_message_ptr msg) {
+        client->set_message_callback([this](mqtt::const_message_ptr msg) {
             onMessageArrived(msg);
         });
 
-        client_->set_connection_lost_handler([this](const std::string& cause) {
+        client->set_connection_lost_handler([this](const std::string& cause) {
             onConnectionLost(cause);
         });
 
-        client_->set_connected_handler([this](const std::string& cause) {
+        client->set_connected_handler([this](const std::string& cause) {
             if (initial_connect_done_) {
                 onReconnected(cause);
             }
         });
+
+        {
+            std::lock_guard<std::mutex> lock(connection_mutex_);
+            broker_address_ = broker_address;
+            username_ = username;
+            password_ = password;
+            replaced = std::move(client_);
+            client_ = client;
+        }
 
         // Connection options
         mqtt::connect_options connOpts;
@@ -58,8 +71,9 @@ bool MqttClient::connect(const std::string& broker_address,
         // Min delay: 1 second, Max delay: 64 seconds
         connOpts.set_automatic_reconnect(1, 64);
 
-        // Connect (blocking)
-        mqtt::token_ptr conntok = client_->connect(connOpts);
+        // Connect (blocking). No lock is held while waiting: Paho's thread
+        // runs our callbacks around the CONNACK, and they must not block.
+        mqtt::token_ptr conntok = client->connect(connOpts);
         conntok->wait();  // Wait for connection
 
         connected_ = true;
@@ -76,23 +90,31 @@ bool MqttClient::connect(const std::string& broker_address,
 }
 
 void MqttClient::disconnect() {
-    std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
+    auto client = currentClient();
 
-    if (client_ && connected_) {
+    // exchange(): only one caller disconnects, and from here on publish(),
+    // subscribe() and unsubscribe() refuse instead of racing Paho's
+    // disconnect. A publish queued mid-disconnect made Paho report a lost
+    // connection afterwards and stalled the next client's connect in tests.
+    if (client && connected_.exchange(false)) {
         try {
             std::cout << "📡 MQTT: Disconnecting..." << std::endl;
-            client_->disconnect()->wait();
-            connected_ = false;
+            // No lock while waiting: Paho may be delivering into a callback
+            // that publishes, and the disconnect cannot complete until it
+            // returns.
+            client->disconnect()->wait();
             std::cout << "📡 MQTT: Disconnected" << std::endl;
         } catch (const mqtt::exception& e) {
             std::cerr << "❌ MQTT: Disconnect error: " << e.what() << std::endl;
+            connected_ = client->is_connected();
         }
     }
 }
 
 bool MqttClient::isConnected() const {
-    std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
-    return connected_ && client_ && client_->is_connected();
+    if (!connected_) return false;
+    auto client = currentClient();
+    return client && client->is_connected();
 }
 
 bool MqttClient::subscribe(const std::string& topic, MessageCallback callback, int qos) {
@@ -101,38 +123,40 @@ bool MqttClient::subscribe(const std::string& topic, MessageCallback callback, i
         return false;
     }
 
+    auto client = currentClient();
+    if (!client) {
+        std::cerr << "❌ MQTT: Not connected, cannot subscribe" << std::endl;
+        return false;
+    }
+
+    // Record the callback before subscribing, so the first message (a
+    // retained one arrives right after the SUBACK) is never missed and a
+    // reconnect re-subscribes it. The lock covers the table only.
+    bool added = false;
+    {
+        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        added = message_callbacks_.count(topic) == 0;
+        message_callbacks_[topic] = callback;
+    }
+
     try {
         std::cout << "📡 MQTT: Subscribing to: " << topic << " (QoS " << qos << ")" << std::endl;
 
-        // Get client pointer (release lock before waiting to prevent deadlock)
-        mqtt::async_client* client_ptr = nullptr;
-        {
-            std::unique_lock<std::recursive_mutex> lock(connection_mutex_, std::try_to_lock);
-            if (!lock.owns_lock()) {
-                std::cerr << "⚠️  MQTT: Mutex busy, cannot subscribe now" << std::endl;
-                return false;
-            }
-            client_ptr = client_.get();
-        }
-        // Mutex released here - prevents deadlock if callback tries to publish
-
-        // Subscribe asynchronously without waiting (truly non-blocking)
-        // Store callback immediately - SUBACK will arrive async
-        {
-            std::lock_guard<std::mutex> lock(callbacks_mutex_);
-            message_callbacks_[topic] = callback;
-        }
-
-        if (client_ptr) {
-            // Initiate async subscribe - don't wait for SUBACK
-            client_ptr->subscribe(topic, qos);
-            std::cout << "✅ MQTT: Subscription initiated for " << topic << " (async)" << std::endl;
-        }
+        // Initiate async subscribe without any lock held, and don't wait for
+        // the SUBACK (callers include the HTTP server's threads)
+        client->subscribe(topic, qos);
+        std::cout << "✅ MQTT: Subscription initiated for " << topic << " (async)" << std::endl;
 
         return true;
 
     } catch (const mqtt::exception& e) {
         std::cerr << "❌ MQTT: Subscribe failed: " << e.what() << std::endl;
+        // Not subscribed: forget the callback this call added, so the caller
+        // sees the failure and a reconnect does not resurrect it.
+        if (added) {
+            std::lock_guard<std::mutex> lock(callbacks_mutex_);
+            message_callbacks_.erase(topic);
+        }
         return false;
     }
 }
@@ -158,11 +182,16 @@ bool MqttClient::unsubscribe(const std::string& topic) {
         return false;
     }
 
+    auto client = currentClient();
+    if (!client) {
+        std::cerr << "❌ MQTT: Not connected, cannot unsubscribe" << std::endl;
+        return false;
+    }
+
     try {
-        {
-            std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
-            client_->unsubscribe(topic)->wait();
-        }
+        // Wait for the UNSUBACK with no lock held: Paho's receive thread
+        // reads it, and may first be running a callback that publishes.
+        client->unsubscribe(topic)->wait();
 
         // Remove callback
         {
@@ -188,23 +217,28 @@ bool MqttClient::publish(const std::string& topic,
         return false;
     }
 
+    auto client = currentClient();
+    if (!client) {
+        std::cerr << "❌ MQTT: Not connected, cannot publish" << std::endl;
+        return false;
+    }
+
     try {
         mqtt::message_ptr pubmsg = mqtt::make_message(topic, payload);
         pubmsg->set_qos(qos);
         pubmsg->set_retained(retain);
 
-        {
-            std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
-            // Publish asynchronously without waiting (don't block while holding lock)
-            client_->publish(pubmsg);
-        }
+        // Publish asynchronously without waiting, and without any lock held
+        client->publish(pubmsg);
 
         // Simplified logging for state messages (too verbose otherwise)
         if (topic.find("/state") != std::string::npos) {
-            // Only log occasionally for state messages
-            static int log_counter = 0;
-            if (++log_counter % 50 == 0) {  // Log every 50th message
-                std::cout << "📤 MQTT: Published " << log_counter << " messages..." << std::endl;
+            // Only log occasionally for state messages (publish() runs on
+            // several threads, hence the atomic)
+            static std::atomic<int> log_counter{0};
+            int published = ++log_counter;
+            if (published % 50 == 0) {  // Log every 50th message
+                std::cout << "📤 MQTT: Published " << published << " messages..." << std::endl;
             }
         } else {
             std::cout << "📤 MQTT: Published to " << topic
@@ -272,23 +306,29 @@ void MqttClient::onMessageArrived(mqtt::const_message_ptr msg) {
     std::string topic = msg->get_topic();
     std::string payload = msg->to_string();
 
-    // Find matching callbacks
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
-
-    for (const auto& [pattern, callback] : message_callbacks_) {
-        if (topicMatches(topic, pattern)) {
-            try {
-                callback(topic, payload);
-            } catch (const std::exception& e) {
-                std::cerr << "❌ MQTT: Callback error for topic " << topic
-                          << ": " << e.what() << std::endl;
+    // Find matching callbacks under the lock, run them without it: a
+    // callback may subscribe, unsubscribe or publish.
+    std::vector<MessageCallback> matching;
+    {
+        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        for (const auto& [pattern, callback] : message_callbacks_) {
+            if (topicMatches(topic, pattern)) {
+                matching.push_back(callback);
             }
+        }
+    }
+
+    for (const auto& callback : matching) {
+        try {
+            callback(topic, payload);
+        } catch (const std::exception& e) {
+            std::cerr << "❌ MQTT: Callback error for topic " << topic
+                      << ": " << e.what() << std::endl;
         }
     }
 }
 
 void MqttClient::onConnectionLost(const std::string& cause) {
-    std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
     connected_ = false;
 
     std::cerr << "⚠️  MQTT: Connection lost: " << cause << std::endl;
@@ -299,17 +339,25 @@ void MqttClient::onConnectionLost(const std::string& cause) {
 }
 
 void MqttClient::onReconnected(const std::string& cause) {
-    {
-        std::lock_guard<std::recursive_mutex> lock(connection_mutex_);
-        connected_ = true;
-    }
+    // Runs on Paho's thread. It takes each lock only long enough to copy, and
+    // that is safe because no thread ever holds one while waiting on Paho.
+    connected_ = true;
     std::cout << "✅ MQTT: Reconnected: " << cause << std::endl;
 
-    // Re-subscribe without waiting — async fire-and-forget avoids paho thread deadlocks
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
-    for (const auto& [topic, callback] : message_callbacks_) {
+    std::vector<std::string> topics;
+    {
+        std::lock_guard<std::mutex> lock(callbacks_mutex_);
+        for (const auto& [topic, callback] : message_callbacks_) {
+            topics.push_back(topic);
+        }
+    }
+    auto client = currentClient();
+    if (!client) return;
+
+    // Re-subscribe without waiting and without any lock held
+    for (const auto& topic : topics) {
         try {
-            client_->subscribe(topic, 1);  // No ->wait()
+            client->subscribe(topic, 1);  // No ->wait()
             std::cout << "✅ MQTT: Re-subscribed to " << topic << std::endl;
         } catch (const mqtt::exception& e) {
             std::cerr << "❌ MQTT: Re-subscribe failed for " << topic << ": " << e.what() << std::endl;

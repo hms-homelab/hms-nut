@@ -1,11 +1,13 @@
 #pragma once
 
 #include <mqtt/async_client.h>
+#include <atomic>
 #include <string>
 #include <functional>
 #include <mutex>
 #include <memory>
 #include <map>
+#include <vector>
 
 namespace hms_nut {
 
@@ -17,6 +19,13 @@ namespace hms_nut {
  * - Subscribing to multi-device UPS topics
  * - Auto-reconnect on connection loss
  * - Thread-safe operations (shared by multiple service threads)
+ *
+ * Locking rule: the two mutexes guard this object's own fields only. No Paho
+ * call, no wait on a Paho token and no user callback ever runs while either is
+ * held. Paho's threads call back into this object (messages, connection lost,
+ * reconnected), so holding a lock across a Paho wait would let those callbacks
+ * block the very thread the wait depends on. Callbacks may therefore publish,
+ * subscribe or unsubscribe freely.
  */
 class MqttClient {
 public:
@@ -130,7 +139,8 @@ private:
     void onConnectionLost(const std::string& cause);
 
     /**
-     * Reconnected callback (internal) — restores connected_ and re-subscribes
+     * Reconnected callback (internal): restores connected_ and re-subscribes
+     * every recorded topic, without holding any lock across the Paho calls
      */
     void onReconnected(const std::string& cause);
 
@@ -143,21 +153,27 @@ private:
      */
     bool topicMatches(const std::string& topic, const std::string& pattern) const;
 
-    // MQTT client
-    std::unique_ptr<mqtt::async_client> client_;
+    /**
+     * The current Paho client, read under connection_mutex_. Callers use the
+     * returned pointer after the lock is released.
+     */
+    std::shared_ptr<mqtt::async_client> currentClient() const;
+
+    // MQTT client (shared so a caller can use it without holding the lock)
+    std::shared_ptr<mqtt::async_client> client_;
     std::string client_id_;
 
     // Message callbacks (map: topic_pattern -> callback)
     std::map<std::string, MessageCallback> message_callbacks_;
-    mutable std::mutex callbacks_mutex_;
+    mutable std::mutex callbacks_mutex_;  // Guards message_callbacks_ only
 
     // Connection state
     std::string broker_address_;
     std::string username_;
     std::string password_;
-    bool connected_;
-    bool initial_connect_done_ = false;
-    mutable std::recursive_mutex connection_mutex_;  // Recursive to allow callback re-entry
+    std::atomic<bool> connected_;
+    std::atomic<bool> initial_connect_done_{false};
+    mutable std::mutex connection_mutex_;  // Guards client_ and the broker fields only
 
     // Auto-reconnect enabled
     bool auto_reconnect_;

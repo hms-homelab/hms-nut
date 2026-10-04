@@ -5,6 +5,44 @@ All notable changes to HMS-NUT will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-10-04
+
+### Fixed
+- **The MQTT client could deadlock.** `hms_nut::MqttClient` held its connection lock while
+  waiting on Paho (`connect()`, `disconnect()`, `unsubscribe()`), while Paho's receive thread
+  needed that same lock in our callbacks: a message handler that publishes (the
+  `homeassistant/status` republish), the connection-lost handler and the reconnect handler.
+  Paho cannot finish the wait until that thread returns, so both hung for good, and with them
+  every later publish and delivery. Removing a device (`unsubscribe()`) while Home Assistant
+  came back online was enough; so was shutting down while a message was being handled.
+  Callbacks also ran under the callback-table lock, so a handler that subscribed deadlocked
+  the receive thread on itself.
+  The locks now guard the client's own fields only: no Paho call, token wait or user callback
+  runs while either is held, and a callback may publish, subscribe or unsubscribe.
+- **`subscribe()` no longer gives up when the client is busy.** It used a `try_lock` and
+  returned false whenever another thread held the lock, for instance a publish from the NUT
+  poll loop, so subscriptions were dropped at random under load. It now always records the
+  topic and subscribes, and returns false only for a real failure (not connected, or Paho
+  rejected it), in which case nothing is left recorded.
+- `disconnect()` marks the client disconnected before it calls Paho, so a publish from
+  another thread is refused instead of racing the disconnect.
+- hms-shared (used for the LLM client) is pinned to the `v1.6.18` tag instead of `main`, so
+  builds are reproducible. hms-nut has its own MQTT client, so hms-shared's MQTT fix in that
+  release does not apply here; the fix above is this service's own.
+
+### Tests
+- New deadline-guarded regression tests: a callback that subscribes, `unsubscribe()` and
+  `disconnect()` while a callback publishes, and 8 threads making 80 concurrent subscriptions
+  under a constant publish load, each of which must then deliver. They fail (hang or drop
+  subscriptions) on 1.4.1 and pass here; a hang fails the test instead of freezing the run.
+- Broker tests only ever reach a broker set with `HMS_NUT_TEST_MQTT_HOST` (and
+  `HMS_NUT_TEST_MQTT_PORT`, default 18883), and skip when it is unset. They no longer fall back
+  to `127.0.0.1:1883` or read the service's own `MQTT_*` settings, so they cannot publish a
+  retained `homeassistant/status` to a live broker by accident.
+- The daily summary database tests take their connection from `DB_*` like the device config
+  test, and skip unless `DB_PASSWORD` is set.
+- The MQTT test binaries have a CTest timeout of 120 s.
+
 ## [1.4.1] - 2026-09-11
 
 ### Fixed
